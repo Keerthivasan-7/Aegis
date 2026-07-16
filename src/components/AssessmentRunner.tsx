@@ -3,6 +3,7 @@ import { Assessment, CodingQuestion, ProctoringLog, Question, Submission, UserPr
 import ProctoringHud from './ProctoringHud';
 import ViolationWarningModal from './ViolationWarningModal';
 import { Clock, ShieldAlert, FileText, CheckCircle, Play, Loader, Code, FileCheck, ArrowRight, CornerDownLeft, AlertTriangle, Volume2, VolumeX } from 'lucide-react';
+import { auth } from '../lib/firebase';
 
 interface AssessmentRunnerProps {
   user: UserProfile;
@@ -11,6 +12,25 @@ interface AssessmentRunnerProps {
 }
 
 export default function AssessmentRunner({ user, assessment, onFinish }: AssessmentRunnerProps) {
+  const getAuthHeaders = async () => {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    try {
+      const firebaseUser = auth.currentUser;
+      if (firebaseUser) {
+        const token = await firebaseUser.getIdToken();
+        headers['Authorization'] = `Bearer ${token}`;
+      } else {
+        headers['Authorization'] = `Bearer local-${user.userId}`;
+      }
+    } catch (err) {
+      console.warn("Auth token fetching failed, relying on local userId fallback:", err);
+      headers['Authorization'] = `Bearer local-${user.userId}`;
+    }
+    return headers;
+  };
+
   const [submissionId, setSubmissionId] = useState('');
   const [started, setStarted] = useState(false);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
@@ -146,11 +166,10 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
       ];
       setProctoringLogs(finalLogs);
 
+      const authHeaders = await getAuthHeaders();
       await fetch('/api/terminate-exam', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: authHeaders,
         body: JSON.stringify({
           submissionId,
           proctoringLogs: finalLogs,
@@ -189,11 +208,10 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
       ];
       setProctoringLogs(finalLogs);
 
+      const authHeaders = await getAuthHeaders();
       await fetch('/api/terminate-exam', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: authHeaders,
         body: JSON.stringify({
           submissionId,
           proctoringLogs: finalLogs,
@@ -302,11 +320,10 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
 
     try {
       // Call backend to authorize and record start-time securely in Firestore
+      const authHeaders = await getAuthHeaders();
       const res = await fetch('/api/start-exam', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: authHeaders,
         body: JSON.stringify({
           assessmentId: assessment.assessmentId,
           studentId: user.userId,
@@ -367,11 +384,10 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
 
     try {
       // Call the secure terminate endpoint
+      const authHeaders = await getAuthHeaders();
       const res = await fetch('/api/terminate-exam', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: authHeaders,
         body: JSON.stringify({
           submissionId,
           proctoringLogs: [
@@ -456,18 +472,18 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
       let allPassed = true;
 
       // Run each test case sequentially on our secure backend sandbox
+      const authHeaders = await getAuthHeaders();
       for (let idx = 0; idx < question.testCases.length; idx++) {
         const tc = question.testCases[idx];
         const res = await fetch('/api/execute-code', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
+          headers: authHeaders,
           body: JSON.stringify({
             code,
             language: lang,
             funcName,
-            inputString: tc.input
+            inputString: tc.input,
+            submissionId
           })
         });
 
@@ -542,11 +558,10 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
       // - runs and grades test cases on the server
       // - invokes Gemini safely for proctoring & behavior analysis
       // - saves the finalized graded document in Firestore
+      const authHeaders = await getAuthHeaders();
       const res = await fetch('/api/submit-assessment', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: authHeaders,
         body: JSON.stringify({
           submissionId,
           answers: submissionAnswers,

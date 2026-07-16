@@ -3,6 +3,48 @@ import { ProctoringLog } from '../types';
 import { Camera, Shield, Eye, AlertCircle, RefreshCw } from 'lucide-react';
 import * as faceapi from '@vladmandic/face-api';
 
+// Robust monkeypatch for faceapi Box, BoundingBox, and Rect classes to prevent "expected box to be IBoundingBox | IRect" crashes
+try {
+  const anyFaceApi = faceapi as any;
+  const classesToPatch = ['Box', 'BoundingBox', 'Rect', 'LabeledBox', 'PredictedBox'];
+  
+  classesToPatch.forEach(className => {
+    let TargetClass = anyFaceApi[className];
+    if (!TargetClass && anyFaceApi.classes) {
+      TargetClass = anyFaceApi.classes[className];
+    }
+    
+    if (TargetClass) {
+      const OriginalConstructor = TargetClass;
+      const PatchedClass = function (this: any, box: any, ...args: any[]) {
+        if (!box || 
+            box.left === null || box.left === undefined || isNaN(box.left) ||
+            box.top === null || box.top === undefined || isNaN(box.top) ||
+            box.right === null || box.right === undefined || isNaN(box.right) ||
+            box.bottom === null || box.bottom === undefined || isNaN(box.bottom) ||
+            box.width === null || box.width === undefined || isNaN(box.width) ||
+            box.height === null || box.height === undefined || isNaN(box.height)) {
+          // Safeguard: use a fallback tiny valid box instead of null/NaN to prevent the internal constructor checks from throwing
+          box = { left: 0, top: 0, right: 1, bottom: 1, width: 1, height: 1 };
+        }
+        return Reflect.construct(OriginalConstructor, [box, ...args]);
+      };
+      PatchedClass.prototype = OriginalConstructor.prototype;
+      Object.setPrototypeOf(PatchedClass, OriginalConstructor);
+      
+      // Try replacing on faceapi root and classes objects
+      try {
+        if (anyFaceApi[className]) anyFaceApi[className] = PatchedClass;
+      } catch (e) {}
+      try {
+        if (anyFaceApi.classes && anyFaceApi.classes[className]) anyFaceApi.classes[className] = PatchedClass;
+      } catch (e) {}
+    }
+  });
+} catch (patchError) {
+  console.warn('Failed to apply faceapi Box/BoundingBox monkeypatch:', patchError);
+}
+
 interface ProctoringHudProps {
   onViolationLogged: (log: ProctoringLog) => void;
   isActive: boolean;
@@ -165,7 +207,19 @@ export default function ProctoringHud({ onViolationLogged, isActive, onMultipleF
 
     const runDetection = async () => {
       const video = videoRef.current;
-      if (!video || video.paused || video.ended || video.readyState < 4 || !video.videoWidth || !video.videoHeight || video.currentTime === 0) {
+      if (
+        !video ||
+        video.paused ||
+        video.ended ||
+        video.readyState < 4 ||
+        typeof video.videoWidth !== 'number' ||
+        typeof video.videoHeight !== 'number' ||
+        isNaN(video.videoWidth) ||
+        isNaN(video.videoHeight) ||
+        video.videoWidth < 10 ||
+        video.videoHeight < 10 ||
+        video.currentTime === 0
+      ) {
         // Not ready yet, schedule next check
         timerId = setTimeout(runDetection, 1500);
         return;
@@ -296,145 +350,149 @@ export default function ProctoringHud({ onViolationLogged, isActive, onMultipleF
     let cycleCount = 0;
 
     const drawOverlay = () => {
-      const canvas = canvasRef.current;
-      const video = videoRef.current;
-      if (!canvas || !video) return;
+      try {
+        const canvas = canvasRef.current;
+        const video = videoRef.current;
+        if (!canvas || !video || !video.videoWidth || !video.videoHeight) return;
 
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
 
-      // Match canvas width/height to feed size
-      if (canvas.width !== video.videoWidth) {
-        canvas.width = video.videoWidth || 320;
-        canvas.height = video.videoHeight || 240;
-      }
+        // Match canvas width/height to feed size
+        if (canvas.width !== video.videoWidth) {
+          canvas.width = video.videoWidth || 320;
+          canvas.height = video.videoHeight || 240;
+        }
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Draw horizontal target crosshairs
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, canvas.height / 2);
-      ctx.lineTo(canvas.width, canvas.height / 2);
-      ctx.moveTo(canvas.width / 2, 0);
-      ctx.lineTo(canvas.width / 2, canvas.height);
-      ctx.stroke();
-
-      cycleCount++;
-
-      const detection = latestDetectionRef.current;
-
-      if (detection.presence === 'Unattended') {
-        // Missing state scanning line
-        ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
-        ctx.lineWidth = 2;
-        const lineY = (canvas.height / 2) + Math.sin(cycleCount * 0.1) * (canvas.height / 2 - 10);
+        // Draw horizontal target crosshairs
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(10, lineY);
-        ctx.lineTo(canvas.width - 10, lineY);
+        ctx.moveTo(0, canvas.height / 2);
+        ctx.lineTo(canvas.width, canvas.height / 2);
+        ctx.moveTo(canvas.width / 2, 0);
+        ctx.lineTo(canvas.width / 2, canvas.height);
         ctx.stroke();
 
-        ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
-        ctx.fillRect(20, canvas.height / 2 - 15, canvas.width - 40, 30);
-        ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
-        ctx.strokeRect(20, canvas.height / 2 - 15, canvas.width - 40, 30);
+        cycleCount++;
 
-        ctx.fillStyle = '#fca5a5';
-        ctx.font = '10px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('WARNING: FACE DETECT ABSENT', canvas.width / 2, canvas.height / 2 + 4);
-      } else {
-        // We have a face! Draw the box and landmarks
-        const isLookingAway = detection.isLookingAway;
-        const hasMultiple = detection.presence === 'Multiple Faces';
+        const detection = latestDetectionRef.current;
 
-        // Corner guides and face box
-        if (detection.box && typeof detection.box.x === 'number' && typeof detection.box.y === 'number' && typeof detection.box.width === 'number' && typeof detection.box.height === 'number' && !isNaN(detection.box.x) && !isNaN(detection.box.y)) {
-          const { x, y, width, height } = detection.box;
+        if (detection.presence === 'Unattended') {
+          // Missing state scanning line
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
+          ctx.lineWidth = 2;
+          const lineY = (canvas.height / 2) + Math.sin(cycleCount * 0.1) * (canvas.height / 2 - 10);
+          ctx.beginPath();
+          ctx.moveTo(10, lineY);
+          ctx.lineTo(canvas.width - 10, lineY);
+          ctx.stroke();
 
-          // Face outline box
-          ctx.strokeStyle = isLookingAway ? 'rgba(239, 68, 68, 0.7)' : 'rgba(16, 185, 129, 0.6)';
-          ctx.lineWidth = 1.5;
-          ctx.strokeRect(x, y, width, height);
+          ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+          ctx.fillRect(20, canvas.height / 2 - 15, canvas.width - 40, 30);
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
+          ctx.strokeRect(20, canvas.height / 2 - 15, canvas.width - 40, 30);
 
-          // Corner guides
-          ctx.fillStyle = isLookingAway ? '#ef4444' : '#10b981';
-          const guideLen = 12;
-          // Top-left
-          ctx.fillRect(x - 1, y - 1, guideLen, 2.5);
-          ctx.fillRect(x - 1, y - 1, 2.5, guideLen);
-          // Top-right
-          ctx.fillRect(x + width - guideLen + 1, y - 1, guideLen, 2.5);
-          ctx.fillRect(x + width - 1.5, y - 1, 2.5, guideLen);
-          // Bottom-left
-          ctx.fillRect(x - 1, y + height - 1.5, guideLen, 2.5);
-          ctx.fillRect(x - 1, y + height - guideLen + 1, 2.5, guideLen);
-          // Bottom-right
-          ctx.fillRect(x + width - guideLen + 1, y + height - 1.5, guideLen, 2.5);
-          ctx.fillRect(x + width - 1.5, y + height - guideLen + 1, 2.5, guideLen);
-
-          // Gaze tracking eye points using real landmarks
-          const landmarks = detection.landmarks;
-          if (landmarks) {
-            const leftEye = landmarks.getLeftEye();
-            const rightEye = landmarks.getRightEye();
-
-            // Calculate centers
-            let lex = 0, ley = 0;
-            leftEye.forEach((p: any) => { lex += p.x; ley += p.y; });
-            lex /= leftEye.length;
-            ley /= leftEye.length;
-
-            let rex = 0, rey = 0;
-            rightEye.forEach((p: any) => { rex += p.x; rey += p.y; });
-            rex /= rightEye.length;
-            rey /= rightEye.length;
-
-            ctx.beginPath();
-            ctx.arc(lex, ley, 3.5, 0, Math.PI * 2);
-            ctx.arc(rex, rey, 3.5, 0, Math.PI * 2);
-            ctx.fillStyle = isLookingAway ? 'rgba(239, 68, 68, 0.9)' : 'rgba(16, 185, 129, 0.9)';
-            ctx.fill();
-
-            // Gaze angle vector
-            if (isLookingAway) {
-              ctx.strokeStyle = '#ef4444';
-              ctx.lineWidth = 1.5;
-              ctx.beginPath();
-              // estimate look-away direction vector
-              const nose = landmarks.getNose();
-              const noseTip = nose[3]; // nose tip point
-              const jawLeft = landmarks.getJawOutline()[0];
-              const jawRight = landmarks.getJawOutline()[16];
-              const dLeft = Math.abs(noseTip.x - jawLeft.x);
-              const dRight = Math.abs(jawRight.x - noseTip.x);
-              const isLeftDir = dLeft < dRight;
-              
-              const dx = isLeftDir ? -35 : 35;
-              ctx.moveTo(lex, ley);
-              ctx.lineTo(lex + dx, ley - 10);
-              ctx.moveTo(rex, rey);
-              ctx.lineTo(rex + dx, rey - 10);
-              ctx.stroke();
-            }
-          }
-
-          // Indicator tag
-          ctx.fillStyle = isLookingAway ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.1)';
-          ctx.fillRect(x + width / 2 - 50, y + height + 10, 100, 16);
-          ctx.strokeStyle = isLookingAway ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.4)';
-          ctx.strokeRect(x + width / 2 - 50, y + height + 10, 100, 16);
-          
-          ctx.fillStyle = isLookingAway ? '#fca5a5' : '#a7f3d0';
-          ctx.font = '9px monospace';
+          ctx.fillStyle = '#fca5a5';
+          ctx.font = '10px monospace';
           ctx.textAlign = 'center';
-          ctx.fillText(
-            hasMultiple ? 'PEOPLE FLAGGED' : isLookingAway ? 'GAZE DEPARTED' : 'GAZE LOGGED',
-            x + width / 2,
-            y + height + 21
-          );
+          ctx.fillText('WARNING: FACE DETECT ABSENT', canvas.width / 2, canvas.height / 2 + 4);
+        } else {
+          // We have a face! Draw the box and landmarks
+          const isLookingAway = detection.isLookingAway;
+          const hasMultiple = detection.presence === 'Multiple Faces';
+
+          // Corner guides and face box
+          if (detection.box && typeof detection.box.x === 'number' && typeof detection.box.y === 'number' && typeof detection.box.width === 'number' && typeof detection.box.height === 'number' && !isNaN(detection.box.x) && !isNaN(detection.box.y)) {
+            const { x, y, width, height } = detection.box;
+
+            // Face outline box
+            ctx.strokeStyle = isLookingAway ? 'rgba(239, 68, 68, 0.7)' : 'rgba(16, 185, 129, 0.6)';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x, y, width, height);
+
+            // Corner guides
+            ctx.fillStyle = isLookingAway ? '#ef4444' : '#10b981';
+            const guideLen = 12;
+            // Top-left
+            ctx.fillRect(x - 1, y - 1, guideLen, 2.5);
+            ctx.fillRect(x - 1, y - 1, 2.5, guideLen);
+            // Top-right
+            ctx.fillRect(x + width - guideLen + 1, y - 1, guideLen, 2.5);
+            ctx.fillRect(x + width - 1.5, y - 1, 2.5, guideLen);
+            // Bottom-left
+            ctx.fillRect(x - 1, y + height - 1.5, guideLen, 2.5);
+            ctx.fillRect(x - 1, y + height - guideLen + 1, 2.5, guideLen);
+            // Bottom-right
+            ctx.fillRect(x + width - guideLen + 1, y + height - 1.5, guideLen, 2.5);
+            ctx.fillRect(x + width - 1.5, y + height - guideLen + 1, 2.5, guideLen);
+
+            // Gaze tracking eye points using real landmarks
+            const landmarks = detection.landmarks;
+            if (landmarks) {
+              const leftEye = landmarks.getLeftEye();
+              const rightEye = landmarks.getRightEye();
+
+              // Calculate centers
+              let lex = 0, ley = 0;
+              leftEye.forEach((p: any) => { lex += p.x; ley += p.y; });
+              lex /= leftEye.length;
+              ley /= leftEye.length;
+
+              let rex = 0, rey = 0;
+              rightEye.forEach((p: any) => { rex += p.x; rey += p.y; });
+              rex /= rightEye.length;
+              rey /= rightEye.length;
+
+              ctx.beginPath();
+              ctx.arc(lex, ley, 3.5, 0, Math.PI * 2);
+              ctx.arc(rex, rey, 3.5, 0, Math.PI * 2);
+              ctx.fillStyle = isLookingAway ? 'rgba(239, 68, 68, 0.9)' : 'rgba(16, 185, 129, 0.9)';
+              ctx.fill();
+
+              // Gaze angle vector
+              if (isLookingAway) {
+                ctx.strokeStyle = '#ef4444';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                // estimate look-away direction vector
+                const nose = landmarks.getNose();
+                const noseTip = nose[3]; // nose tip point
+                const jawLeft = landmarks.getJawOutline()[0];
+                const jawRight = landmarks.getJawOutline()[16];
+                const dLeft = Math.abs(noseTip.x - jawLeft.x);
+                const dRight = Math.abs(jawRight.x - noseTip.x);
+                const isLeftDir = dLeft < dRight;
+                
+                const dx = isLeftDir ? -35 : 35;
+                ctx.moveTo(lex, ley);
+                ctx.lineTo(lex + dx, ley - 10);
+                ctx.moveTo(rex, rey);
+                ctx.lineTo(rex + dx, rey - 10);
+                ctx.stroke();
+              }
+            }
+
+            // Indicator tag
+            ctx.fillStyle = isLookingAway ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.1)';
+            ctx.fillRect(x + width / 2 - 50, y + height + 10, 100, 16);
+            ctx.strokeStyle = isLookingAway ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.4)';
+            ctx.strokeRect(x + width / 2 - 50, y + height + 10, 100, 16);
+            
+            ctx.fillStyle = isLookingAway ? '#fca5a5' : '#a7f3d0';
+            ctx.font = '9px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(
+              hasMultiple ? 'PEOPLE FLAGGED' : isLookingAway ? 'GAZE DEPARTED' : 'GAZE LOGGED',
+              x + width / 2,
+              y + height + 21
+            );
+          }
         }
+      } catch (err) {
+        console.warn('Overlay drawing canvas failure (handled gracefully):', err);
       }
 
       animId = requestAnimationFrame(drawOverlay);

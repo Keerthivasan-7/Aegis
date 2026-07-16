@@ -39,6 +39,25 @@ try {
   console.error("CRITICAL: Firebase Admin initialization failed. Server operations may fallback to simulation:", error);
 }
 
+// --- SERVER-SIDE LOCAL SANDBOX MODE FLAG ---
+// Computed once at startup from server-only env vars. The client cannot influence this flag.
+// local-* bearer tokens are ONLY accepted when the server has determined it has no real
+// Firebase / GCP credentials — i.e., a genuine offline demo deployment.
+// In any deployment where at least one of the following is set, local tokens are rejected outright.
+const IS_LOCAL_SANDBOX_MODE: boolean =
+  !process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim() &&
+  !process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim() &&
+  !process.env.GOOGLE_CLOUD_PROJECT?.trim();
+
+if (IS_LOCAL_SANDBOX_MODE) {
+  console.warn('[Auth] ⚠  Server is operating in LOCAL SANDBOX MODE — no Firebase/GCP credentials detected.');
+  console.warn('[Auth]    local-* tokens are accepted for offline demo use only.');
+  console.warn('[Auth]    To disable local-token auth in production, set FIREBASE_SERVICE_ACCOUNT_JSON or GOOGLE_CLOUD_PROJECT.');
+} else {
+  console.log('[Auth] ✓  Firebase/GCP credentials detected. LOCAL SANDBOX MODE is DISABLED.');
+  console.log('[Auth]    local-* tokens will be rejected regardless of what clients send.');
+}
+
 // --- LAZY GEMINI CLIENT ---
 let aiClient: GoogleGenAI | null = null;
 
@@ -53,34 +72,130 @@ function getAiClient(): GoogleGenAI {
   return aiClient;
 }
 
+/**
+ * Resilient wrapper for Gemini content generation that retries and falls back
+ * across multiple models in the event of 503 (Unavailable) or 429 (Rate Limit) errors.
+ */
+async function generateContentWithFallback(
+  ai: GoogleGenAI,
+  prompt: string,
+  responseMimeType?: string
+): Promise<string> {
+  // Ordered sequence of models to attempt
+  const modelsToTry = [
+    'gemini-3.5-flash',
+    'gemini-2.5-flash',
+    'gemini-1.5-flash',
+    'gemini-2.5-pro',
+    'gemini-1.5-pro'
+  ];
+  let lastError: any = null;
+
+  for (const model of modelsToTry) {
+    let attempts = 0;
+    const maxAttempts = 2;
+    while (attempts < maxAttempts) {
+      try {
+        console.log(`[Gemini Safe Dispatch] Trying model: ${model} (attempt ${attempts + 1}/${maxAttempts})`);
+        const response = await ai.models.generateContent({
+          model: model,
+          contents: prompt,
+          config: responseMimeType ? { responseMimeType } : undefined,
+        });
+
+        if (response.text) {
+          console.log(`[Gemini Safe Dispatch] Success using model: ${model}`);
+          return response.text;
+        }
+      } catch (err: any) {
+        lastError = err;
+        const errStr = err instanceof Error ? err.message : String(err);
+        console.warn(`[Gemini Safe Dispatch] Model ${model} failed (attempt ${attempts + 1}): ${errStr}`);
+        attempts++;
+        if (attempts < maxAttempts) {
+          // Exponential backoff
+          await new Promise((resolve) => setTimeout(resolve, 800 * attempts));
+        }
+      }
+    }
+  }
+  throw lastError || new Error('All Gemini fallback models exhausted without successful resolution');
+}
+
 // --- SECURE SANDBOX CODE EXECUTION FUNCTIONS ---
 
 function runJsSandbox(code: string, funcName: string, inputString: string): Promise<{ success: boolean; result?: any; error?: string }> {
   return new Promise((resolve) => {
-    try {
-      const sandbox = {
-        console: { log: () => {} },
-      };
-      const context = vm.createContext(sandbox);
+    // Generate clean node subprocess wrapper script
+    const scriptCode = `
+      const vm = require('vm');
+      try {
+        const sandbox = {
+          console: { log: () => {} },
+        };
+        const context = vm.createContext(sandbox);
+        const codeToRun = ${JSON.stringify(code)};
+        const funcName = ${JSON.stringify(funcName)};
+        const inputStr = ${JSON.stringify(inputString)};
 
-      const scriptCode = `
-        ${code}
-        try {
-          const res = ${funcName}(${inputString});
-          // Ensure return value can be safely stringified/parsed
-          JSON.stringify(res);
-          res;
-        } catch(e) {
-          throw new Error("runtime_error: " + e.message);
+        const scriptCode = codeToRun + "\\n" +
+          "try { const res = " + funcName + "(" + inputStr + "); JSON.stringify(res); res; } catch(e) { throw new Error('runtime_error: ' + e.message); }";
+
+        const script = new vm.Script(scriptCode);
+        const result = script.runInContext(context, { timeout: 1000 });
+        console.log("---JS_OUT_START---");
+        console.log(JSON.stringify(result));
+        console.log("---JS_OUT_END---");
+      } catch (err) {
+        console.log("---JS_OUT_START---");
+        console.log(JSON.stringify({ sandbox_runtime_error: err.message }));
+        console.log("---JS_OUT_END---");
+      }
+    `;
+
+    const tempDir = os.tmpdir();
+    const tempFile = path.join(tempDir, `js_sandbox_${Date.now()}_${Math.random().toString(36).substring(7)}.js`);
+
+    fs.writeFile(tempFile, scriptCode, (err) => {
+      if (err) {
+        return resolve({ success: false, error: "Sandbox file IO failure" });
+      }
+
+      // Execute node with an empty env block so NO env secrets are visible to the child process!
+      exec(`node ${tempFile}`, { timeout: 1500, maxBuffer: 1024 * 1024, env: {} }, (execErr, stdout, stderr) => {
+        // Clean up temp file immediately
+        fs.unlink(tempFile, () => {});
+
+        if (execErr) {
+          if (execErr.killed) {
+            return resolve({ success: false, error: "Execution Timeout: Code took too long to run." });
+          }
+          return resolve({ success: false, error: stderr || execErr.message });
         }
-      `;
 
-      const script = new vm.Script(scriptCode);
-      const result = script.runInContext(context, { timeout: 1000 }); // Strict 1 second instruction timeout
-      resolve({ success: true, result });
-    } catch (err: any) {
-      resolve({ success: false, error: err.message });
-    }
+        try {
+          const startTag = "---JS_OUT_START---";
+          const endTag = "---JS_OUT_END---";
+          const startIdx = stdout.indexOf(startTag);
+          const endIdx = stdout.indexOf(endTag);
+
+          if (startIdx === -1 || endIdx === -1) {
+            return resolve({ success: false, error: stdout || stderr || "No output generated" });
+          }
+
+          const targetChunk = stdout.substring(startIdx + startTag.length, endIdx).trim();
+          const parsed = JSON.parse(targetChunk);
+
+          if (parsed && typeof parsed === 'object' && 'sandbox_runtime_error' in parsed) {
+            return resolve({ success: false, error: parsed.sandbox_runtime_error });
+          }
+
+          resolve({ success: true, result: parsed });
+        } catch (parseErr: any) {
+          resolve({ success: false, error: stdout || "Failed to process sandbox response" });
+        }
+      });
+    });
   });
 }
 
@@ -89,7 +204,9 @@ function runPythonSandbox(code: string, funcName: string, inputString: string): 
     const tempDir = os.tmpdir();
     const tempFile = path.join(tempDir, `sandbox_${Date.now()}_${Math.random().toString(36).substring(7)}.py`);
 
-    // Wrap python invocation in json.dumps output
+    const escapedInputString = inputString.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+    // Wrap python invocation in json.loads output securely, entirely avoiding python eval()
     const runnerScript = `
 import json
 import sys
@@ -97,10 +214,10 @@ import sys
 ${code}
 
 try:
-    # Evaluate inputs from string format safely
-    val = eval('(${inputString})')
-    if not isinstance(val, tuple):
-        val = (val,)
+    # Safely load the inputs via json.loads
+    val = json.loads("[${escapedInputString}]")
+    if not isinstance(val, list):
+        val = [val]
     
     result = ${funcName}(*val)
     # Output JSON stringified response for parent process to capture
@@ -118,8 +235,8 @@ except Exception as e:
         return resolve({ success: false, error: "Sandbox file IO failure" });
       }
 
-      // Execute Python 3 in a sandboxed subprocess with strict boundaries
-      exec(`python3 ${tempFile}`, { timeout: 1500, maxBuffer: 1024 * 1024 }, (execErr, stdout, stderr) => {
+      // Execute Python 3 in a sandboxed subprocess with clean empty env environment
+      exec(`python3 ${tempFile}`, { timeout: 1500, maxBuffer: 1024 * 1024, env: {} }, (execErr, stdout, stderr) => {
         // Clean up immediately
         fs.unlink(tempFile, () => {});
 
@@ -340,9 +457,127 @@ for (const u of defaultUsers) {
   serverInMemoryUsers.set(u.userId, u);
 }
 
-// Server-Admin Seeding Endpoint to securely initialize Firestore collections without unauthenticated client writes
-app.post('/api/seed-database', async (req, res) => {
+// --- AUTHENTICATION & SESSION AUTHORIZATION MIDDLEWARE ---
+
+async function requireAuth(req: any, res: any, next: any) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized: Missing or malformed authorization token' });
+  }
+
+  const token = authHeader.substring(7);
+
+  if (token.startsWith('local-')) {
+    // Local-token auth: ONLY honored when the server itself has determined it is in local sandbox
+    // mode (IS_LOCAL_SANDBOX_MODE). The client's claim of "I am in local mode" is never trusted —
+    // this flag is server-computed from env vars at startup and cannot be influenced by any request.
+    if (!IS_LOCAL_SANDBOX_MODE) {
+      return res.status(401).json({ error: 'Unauthorized: Local sandbox tokens are not accepted in this deployment' });
+    }
+    const userId = token.substring(6);
+    const userProfile = serverInMemoryUsers.get(userId);
+    if (!userProfile) {
+      return res.status(401).json({ error: 'Unauthorized: Invalid local sandbox user credentials' });
+    }
+    // SECURITY: Local-mode users are NEVER granted admin role, even if the stored profile holds
+    // role:'admin'. An unauthenticated caller guessing a userId string must not be able to mint
+    // admin authority. verifyActiveSession's admin short-circuit is only reachable via a real
+    // Firebase-verified admin token — never through the local-token path.
+    const safeProfile = {
+      ...userProfile,
+      role: userProfile.role === 'admin' ? 'student' : userProfile.role
+    };
+    req.user = safeProfile;
+    return next();
+  }
+
+  // Firebase Admin Token Verification
   try {
+    const decodedToken = await getAuth().verifyIdToken(token);
+    const userId = decodedToken.uid;
+    let profile = null;
+    if (firestoreDb) {
+      try {
+        const userDoc = await firestoreDb.collection('users').doc(userId).get();
+        if (userDoc.exists) {
+          profile = userDoc.data();
+        }
+      } catch (dbErr) {
+        console.warn("Auth middleware db query failed, using mock cache:", dbErr);
+      }
+    }
+    if (!profile) {
+      profile = serverInMemoryUsers.get(userId) || {
+        userId,
+        name: decodedToken.name || 'Candidate',
+        email: decodedToken.email,
+        role: 'student',
+        createdAt: new Date().toISOString()
+      };
+    }
+    req.user = profile;
+    next();
+  } catch (err: any) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid authentication credentials', details: err.message });
+  }
+}
+
+async function verifyActiveSession(req: any, res: any, submissionId: string): Promise<any | null> {
+  if (!submissionId) {
+    res.status(400).json({ error: 'Missing active session authorization identifier' });
+    return null;
+  }
+  const caller = req.user;
+  if (!caller) {
+    res.status(401).json({ error: 'Authentication required' });
+    return null;
+  }
+
+  if (caller.role === 'admin') {
+    return true; // Administrators possess global authority
+  }
+
+  let subData: any = null;
+  if (firestoreDb) {
+    try {
+      const doc = await firestoreDb.collection('submissions').doc(submissionId).get();
+      if (doc.exists) {
+        subData = doc.data();
+      }
+    } catch (err) {
+      console.warn("Session verification database lookup failed, checking cache:", err);
+    }
+  }
+  if (!subData) {
+    subData = serverInMemorySubmissions.get(submissionId);
+  }
+
+  if (!subData) {
+    res.status(404).json({ error: 'Assessment session not found' });
+    return null;
+  }
+
+  if (subData.studentId !== caller.userId) {
+    res.status(403).json({ error: 'Access Denied: You do not own this assessment session' });
+    return null;
+  }
+
+  if (subData.status !== 'ongoing') {
+    res.status(403).json({ error: 'Access Denied: This assessment session is no longer active' });
+    return null;
+  }
+
+  return subData;
+}
+
+// Server-Admin Seeding Endpoint to securely initialize Firestore collections without unauthenticated client writes
+app.post('/api/seed-database', requireAuth, async (req, res) => {
+  try {
+    const caller = (req as any).user;
+    if (caller.role !== 'admin') {
+      return res.status(403).json({ error: 'Access Denied: Only administrators can seed databases.' });
+    }
+
     if (!firestoreDb) {
       console.warn('[Server Seed] Firestore Admin DB is null. Local/Simulation mode fallback is active.');
       return res.json({ success: true, warning: 'Firestore Admin is not initialized; running in simulation fallback mode' });
@@ -388,13 +623,19 @@ app.post('/api/seed-database', async (req, res) => {
 });
 
 // 1. Server-Authoritative Exam Timing Trigger (Starts the assessment)
-app.post('/api/start-exam', async (req, res) => {
+app.post('/api/start-exam', requireAuth, async (req, res) => {
   try {
+    const caller = (req as any).user;
     const { assessmentId, studentId, studentName, studentEmail } = req.body;
 
     // Input sanitization
     if (!assessmentId || !studentId || !studentName || !studentEmail) {
       return res.status(400).json({ error: 'Missing start payload fields' });
+    }
+
+    // Verify student is only starting an exam for themselves
+    if (caller.role !== 'admin' && caller.userId !== studentId) {
+      return res.status(403).json({ error: 'Access Denied: Cannot register session for another candidate ID' });
     }
 
     if (studentName.length > 100 || studentEmail.length > 150) {
@@ -504,13 +745,17 @@ app.post('/api/start-exam', async (req, res) => {
 });
 
 // 2. Sandboxed Code Judge Execution Endpoint
-app.post('/api/execute-code', async (req, res) => {
+app.post('/api/execute-code', requireAuth, async (req, res) => {
   try {
-    const { code, language, funcName, inputString } = req.body;
+    const { code, language, funcName, inputString, submissionId } = req.body;
 
-    if (!code || !funcName || !inputString) {
+    if (!code || !funcName || !inputString || !submissionId) {
       return res.status(400).json({ error: 'Missing execution parameters' });
     }
+
+    // Verify session state is ongoing and owned by candidate
+    const sessionActive = await verifyActiveSession(req, res, submissionId);
+    if (!sessionActive) return; // verifyActiveSession handles HTTP response
 
     // Server-side input length sanitization
     if (code.length > 20000 || inputString.length > 2000) {
@@ -534,7 +779,7 @@ app.post('/api/execute-code', async (req, res) => {
 });
 
 // 3. Server-Authoritative Secured Grading & Integrity Evaluator Route
-app.post('/api/submit-assessment', async (req, res) => {
+app.post('/api/submit-assessment', requireAuth, async (req, res) => {
   try {
     const { submissionId, answers, proctoringLogs } = req.body;
 
@@ -542,41 +787,17 @@ app.post('/api/submit-assessment', async (req, res) => {
       return res.status(400).json({ error: 'Missing submission payload' });
     }
 
+    // Verify session is active and owned by candidate
+    const subData = await verifyActiveSession(req, res, submissionId);
+    if (!subData) return;
+
     // Input length sanitization to avoid DB overload
     if (JSON.stringify(answers).length > 200000 || (proctoringLogs && proctoringLogs.length > 1000)) {
       return res.status(400).json({ error: 'Payload exceeds safe data limits' });
     }
 
     const submittedAt = new Date().toISOString();
-
-    let subData: any = null;
     let useFallback = !firestoreDb;
-
-    if (firestoreDb) {
-      try {
-        const subDoc = await firestoreDb.collection('submissions').doc(submissionId).get();
-        if (subDoc.exists) {
-          subData = subDoc.data()!;
-        } else {
-          subData = serverInMemorySubmissions.get(submissionId);
-        }
-      } catch (err: any) {
-        console.warn(`[Firestore Warning] Failed to fetch submission ${submissionId} from Firestore (Using local fallback):`, err.message || err);
-        useFallback = true;
-        subData = serverInMemorySubmissions.get(submissionId);
-      }
-    } else {
-      subData = serverInMemorySubmissions.get(submissionId);
-    }
-
-    if (!subData) {
-      return res.status(404).json({ error: 'Assessment session not found' });
-    }
-
-    if (subData.status === 'graded') {
-      // Idempotency rate-limiter check: already graded, return cached document immediately
-      return res.json(subData);
-    }
 
     // 2. Fetch assessment details to grade responses server-side securely
     let assessment: any = null;
@@ -597,7 +818,6 @@ app.post('/api/submit-assessment', async (req, res) => {
     }
 
     if (!assessment) {
-      // Direct hard fallback to primary assessment object
       assessment = serverInMemoryAssessments.get('assess-1');
     }
 
@@ -619,7 +839,6 @@ app.post('/api/submit-assessment', async (req, res) => {
     // 4. Server-Side Execution & Grading Loop
     let score = 0;
     let totalPoints = 0;
-    const testCaseReports: Record<string, string> = {};
 
     for (const q of questions) {
       totalPoints += q.points || 0;
@@ -675,7 +894,7 @@ app.post('/api/submit-assessment', async (req, res) => {
       }
     }
 
-    // 5. Build AI Proctoring Prompt for Gemini 2.5 Flash
+    // 5. Build AI Proctoring Prompt for Gemini 3.5 Flash
     const logs = proctoringLogs || [];
     if (timingViolation) {
       logs.push({
@@ -732,16 +951,8 @@ Return ONLY the raw JSON string. Do not wrap in markdown block fences like \`\`\
 
     try {
       const ai = getAiClient();
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        }
-      });
-
-      const responseText = response.text?.trim() || '{}';
-      const parsed = JSON.parse(responseText);
+      const responseText = await generateContentWithFallback(ai, prompt, 'application/json');
+      const parsed = JSON.parse(responseText.trim() || '{}');
       aiRiskScore = parsed.aiRiskScore !== undefined ? parsed.aiRiskScore : 0;
       aiProctoringSummary = parsed.aiProctoringSummary || '';
     } catch (aiError) {
@@ -782,7 +993,7 @@ Return ONLY the raw JSON string. Do not wrap in markdown block fences like \`\`\
 });
 
 // 4. Server-Authoritative Secured Exam Disciplinary Termination Route
-app.post('/api/terminate-exam', async (req, res) => {
+app.post('/api/terminate-exam', requireAuth, async (req, res) => {
   try {
     const { submissionId, proctoringLogs, reason } = req.body;
 
@@ -790,43 +1001,19 @@ app.post('/api/terminate-exam', async (req, res) => {
       return res.status(400).json({ error: 'Missing submission payload' });
     }
 
+    // Verify session is active and owned by candidate
+    const subData = await verifyActiveSession(req, res, submissionId);
+    if (!subData) return;
+
     // Input length sanitization to avoid DB overload
     if (proctoringLogs && proctoringLogs.length > 1000) {
       return res.status(400).json({ error: 'Payload exceeds safe data limits' });
     }
 
     const submittedAt = new Date().toISOString();
-
-    let subData: any = null;
     let useFallback = !firestoreDb;
 
-    if (firestoreDb) {
-      try {
-        const subDoc = await firestoreDb.collection('submissions').doc(submissionId).get();
-        if (subDoc.exists) {
-          subData = subDoc.data()!;
-        } else {
-          subData = serverInMemorySubmissions.get(submissionId);
-        }
-      } catch (err: any) {
-        console.warn(`[Firestore Warning] Failed to fetch submission ${submissionId} from Firestore (Using local fallback):`, err.message || err);
-        useFallback = true;
-        subData = serverInMemorySubmissions.get(submissionId);
-      }
-    } else {
-      subData = serverInMemorySubmissions.get(submissionId);
-    }
-
-    if (!subData) {
-      return res.status(404).json({ error: 'Assessment session not found' });
-    }
-
-    if (subData.status === 'graded' || subData.status === 'terminated') {
-      return res.json(subData);
-    }
-
     // Set status: 'terminated', score: 0, save proctoringLogs and terminationReason, submittedAt: new timestamp.
-    // Do NOT call the Gemini grading step.
     const finalizedPayload = {
       ...subData,
       status: 'terminated',
@@ -856,9 +1043,28 @@ app.post('/api/terminate-exam', async (req, res) => {
   }
 });
 
+// Graceful unhandled-rejection handler: prevents google-auth-library's background async
+// chains from crashing the process when no ADC credentials are present in local dev.
+process.on('unhandledRejection', (reason: any) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  if (msg.includes('NO_ADC_FOUND') || msg.includes('Could not load the default credentials') || msg.includes('default credentials')) {
+    console.warn('[Auth] Firebase ADC not available (expected in local sandbox mode). Firestore disabled.');
+    firestoreDb = null;
+  } else {
+    // Re-surface unexpected unhandled rejections as warnings so real bugs aren't silenced
+    console.error('[Server] Unhandled rejection:', reason);
+  }
+});
+
 // Serve frontend assets
 async function startServer() {
-  if (firestoreDb) {
+  if (IS_LOCAL_SANDBOX_MODE) {
+    // In local sandbox mode there are no Firebase credentials. Skip the Firestore connection
+    // check entirely — attempting it would trigger gRPC/ADC initialization that throws an
+    // unhandled rejection outside our try/catch boundary and crashes the process.
+    console.log('[Firebase Info] Local sandbox mode: Firestore client disabled at startup. Using in-memory cache.');
+    firestoreDb = null;
+  } else if (firestoreDb) {
     try {
       // Validate read permission on Firestore to catch unauthorized Project ID configuration early
       await firestoreDb.collection('_connection_check_').limit(1).get();
