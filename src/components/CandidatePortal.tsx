@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Assessment, Submission, UserProfile } from '../types';
-import { getAssessments, getSubmissionsForStudent } from '../lib/db';
-import { BookOpen, Calendar, Clock, Award, ShieldAlert, CheckCircle, FileCode, Play } from 'lucide-react';
+import { getAssessments, getSubmissionsForStudent, isUsingLocalSandbox } from '../lib/db';
+import { BookOpen, Calendar, Clock, Award, ShieldAlert, CheckCircle, FileCode, Play, Loader, AlertTriangle } from 'lucide-react';
 
 interface CandidatePortalProps {
   user: UserProfile;
@@ -10,8 +10,30 @@ interface CandidatePortalProps {
 }
 
 export default function CandidatePortal({ user, onSelectAssessment, onLogout }: CandidatePortalProps) {
-  const assessments = getAssessments();
-  const submissions = getSubmissionsForStudent(user.userId);
+  const [assessments, setAssessments] = useState<Assessment[]>([]);
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    async function loadPortalData() {
+      try {
+        setLoading(true);
+        const [allAssessments, studentSubmissions] = await Promise.all([
+          getAssessments(),
+          getSubmissionsForStudent(user.userId)
+        ]);
+        setAssessments(allAssessments);
+        setSubmissions(studentSubmissions);
+      } catch (err: any) {
+        console.error("Portal load error:", err);
+        setError("Failed to retrieve candidate credentials or active tests from security grid.");
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadPortalData();
+  }, [user.userId]);
 
   const getSubmissionStatus = (assessmentId: string): Submission | undefined => {
     return submissions.find(s => s.assessmentId === assessmentId);
@@ -25,10 +47,15 @@ export default function CandidatePortal({ user, onSelectAssessment, onLogout }: 
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-md shadow-indigo-600/20">
-              <span className="text-sm font-display tracking-wider">IQ</span>
+              <span className="text-sm font-display tracking-wider">AE</span>
             </div>
-            <span className="font-display font-semibold tracking-tight text-md text-zinc-100">IntegrityIQ</span>
+            <span className="font-display font-semibold tracking-tight text-md text-zinc-100">Aegis</span>
             <span className="text-[10px] bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-zinc-400 font-mono font-medium">Candidate Portal</span>
+            {isUsingLocalSandbox() && (
+              <span className="text-[10px] bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded px-1.5 py-0.5 font-mono font-medium animate-pulse">
+                Sandbox Mode (Offline Fallback)
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-4">
@@ -57,11 +84,18 @@ export default function CandidatePortal({ user, onSelectAssessment, onLogout }: 
               Welcome back, <span className="text-indigo-400 underline decoration-indigo-500/30 underline-offset-4 font-semibold">{user.name}</span>.
             </h1>
             <p className="text-sm text-zinc-400 leading-relaxed">
-              IntegrityIQ uses intelligent proctoring systems to guarantee equal and fair conditions for every test taker.
+              Aegis uses intelligent proctoring systems to guarantee equal and fair conditions for every test taker.
               Before initiating any evaluation, please ensure your camera works and configure your workspace to prevent external disruptions.
             </p>
           </div>
         </div>
+
+        {error && (
+          <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-sm font-medium flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+            {error}
+          </div>
+        )}
 
         {/* Two Columns: Left (Active Tests), Right (Previous logs & constraints) */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -73,7 +107,12 @@ export default function CandidatePortal({ user, onSelectAssessment, onLogout }: 
               <h2 className="text-md font-semibold text-zinc-100">Available Examinations</h2>
             </div>
 
-            {assessments.length === 0 ? (
+            {loading ? (
+              <div className="border border-zinc-900 bg-[#121214]/40 rounded-xl p-16 flex flex-col items-center justify-center gap-4 text-sm text-zinc-400 font-mono">
+                <Loader className="w-8 h-8 animate-spin text-indigo-500" />
+                Establishing security handshake...
+              </div>
+            ) : assessments.length === 0 ? (
               <div className="border border-dashed border-zinc-800 rounded-xl p-8 text-center text-sm text-zinc-500 font-mono">
                 No assessments scheduled currently.
               </div>
@@ -157,7 +196,7 @@ export default function CandidatePortal({ user, onSelectAssessment, onLogout }: 
             <div className="bg-[#121214]/60 border border-zinc-800 rounded-xl p-6 space-y-6">
               <div className="text-xs text-zinc-400 leading-relaxed space-y-4">
                 <p>
-                  IntegrityIQ acts as an autonomous digital proctor. The following events are logged in real-time and analyzed by Gemini for final grading validation:
+                  Aegis acts as an autonomous digital proctor. The following events are logged in real-time and analyzed by Gemini for final grading validation:
                 </p>
 
                 <div className="space-y-3 font-mono text-[11px]">

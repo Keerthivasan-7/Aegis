@@ -1,5 +1,5 @@
 {
-  "name": "IntegrityIQ",
+  "name": "Aegis",
   "description": "An AI-powered Secure Online Assessment Platform featuring real-time proctoring, risk analysis, and candidate evaluation.",
   "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

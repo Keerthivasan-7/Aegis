@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Assessment, Question, Submission, UserProfile } from '../types';
-import { getAssessments, getSubmissions, saveAssessment } from '../lib/db';
+import { getAssessments, getSubmissions, saveAssessment, isUsingLocalSandbox } from '../lib/db';
 import { RiskDistributionChart, ViolationBreakdownChart } from './CustomCharts';
 import { 
   Users, ShieldAlert, Award, FileSpreadsheet, Search, RefreshCw, 
@@ -13,8 +13,9 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) {
-  const [assessments, setAssessments] = useState<Assessment[]>(() => getAssessments());
-  const [submissions, setSubmissions] = useState<Submission[]>(() => getSubmissions());
+  const [assessments, setAssessments] = useState<Assessment[]>([]);
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [riskFilter, setRiskFilter] = useState<'all' | 'high' | 'low'>('all');
   const [selectedSubmission, setSelectedSubmission] = useState<Submission | null>(null);
@@ -41,9 +42,28 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
     { input: '', expectedOutput: '' }
   ]);
 
+  const loadDashboardData = async () => {
+    try {
+      setLoading(true);
+      const [allAssessments, allSubmissions] = await Promise.all([
+        getAssessments(),
+        getSubmissions()
+      ]);
+      setAssessments(allAssessments || []);
+      setSubmissions(allSubmissions || []);
+    } catch (e) {
+      console.error("Dashboard failed to retrieve live metrics:", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  React.useEffect(() => {
+    loadDashboardData();
+  }, []);
+
   const handleRefresh = () => {
-    setAssessments(getAssessments());
-    setSubmissions(getSubmissions());
+    loadDashboardData();
   };
 
   // Metric computations
@@ -100,7 +120,7 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
     setTestCases([{ input: '', expectedOutput: '' }]);
   };
 
-  const handleSaveQuiz = () => {
+  const handleSaveQuiz = async () => {
     if (!newTitle.trim() || newQuestions.length === 0) return;
 
     const newAssessment: Assessment = {
@@ -113,8 +133,8 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
       createdAt: new Date().toISOString()
     };
 
-    saveAssessment(newAssessment);
-    setAssessments(getAssessments());
+    await saveAssessment(newAssessment);
+    await loadDashboardData();
     
     // Clear quiz builder state
     setNewTitle('');
@@ -132,10 +152,15 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-md shadow-indigo-600/20">
-              <span className="text-sm font-display tracking-wider">IQ</span>
+              <span className="text-sm font-display tracking-wider">AE</span>
             </div>
-            <span className="font-display font-semibold tracking-tight text-md text-zinc-100">IntegrityIQ</span>
+            <span className="font-display font-semibold tracking-tight text-md text-zinc-100">Aegis</span>
             <span className="text-[10px] bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-zinc-400 font-mono font-medium">Examiner Dashboard</span>
+            {isUsingLocalSandbox() && (
+              <span className="text-[10px] bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded px-1.5 py-0.5 font-mono font-medium animate-pulse">
+                Sandbox Mode (Offline Fallback)
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-4">
@@ -637,32 +662,60 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
                 <div className="p-5 bg-zinc-900/60 border border-zinc-800 rounded-xl text-center space-y-2.5">
                   <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 font-semibold block">INTEGRITY RISK PROFILE</span>
                   
-                  <div className="relative inline-flex items-center justify-center">
-                    <svg className="w-24 h-24 transform -rotate-90" viewBox="0 0 36 36">
-                      <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#27272a" strokeWidth="3" />
-                      <circle
-                        cx="18"
-                        cy="18"
-                        r="15.915"
-                        fill="transparent"
-                        stroke={(selectedSubmission.aiRiskScore || 0) >= 60 ? '#ef4444' : (selectedSubmission.aiRiskScore || 0) >= 30 ? '#f59e0b' : '#10b981'}
-                        strokeWidth="3.5"
-                        strokeDasharray={`${selectedSubmission.aiRiskScore || 0} ${100 - (selectedSubmission.aiRiskScore || 0)}`}
-                        strokeDashoffset="25"
-                      />
-                    </svg>
-                    <span className="absolute text-xl font-bold font-mono text-zinc-100">{selectedSubmission.aiRiskScore || 0}%</span>
-                  </div>
+                  {selectedSubmission.aiProctoringSummary === 'AI unavailable' ? (
+                    <div className="space-y-3">
+                      <div className="relative inline-flex items-center justify-center">
+                        <svg className="w-24 h-24 transform -rotate-90" viewBox="0 0 36 36">
+                          <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#27272a" strokeWidth="3" />
+                          <circle
+                            cx="18"
+                            cy="18"
+                            r="15.915"
+                            fill="transparent"
+                            stroke="#3f3f46"
+                            strokeWidth="3.5"
+                            strokeDasharray="0 100"
+                            strokeDashoffset="25"
+                          />
+                        </svg>
+                        <span className="absolute text-xs font-bold font-mono text-zinc-500">AI N/A</span>
+                      </div>
+                      <div>
+                        <span className="inline-block text-[11px] font-bold px-3 py-1 rounded-full border bg-zinc-900 border-zinc-800 text-zinc-400">
+                          AI UNAVAILABLE
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="relative inline-flex items-center justify-center">
+                        <svg className="w-24 h-24 transform -rotate-90" viewBox="0 0 36 36">
+                          <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#27272a" strokeWidth="3" />
+                          <circle
+                            cx="18"
+                            cy="18"
+                            r="15.915"
+                            fill="transparent"
+                            stroke={(selectedSubmission.aiRiskScore || 0) >= 60 ? '#ef4444' : (selectedSubmission.aiRiskScore || 0) >= 30 ? '#f59e0b' : '#10b981'}
+                            strokeWidth="3.5"
+                            strokeDasharray={`${selectedSubmission.aiRiskScore || 0} ${100 - (selectedSubmission.aiRiskScore || 0)}`}
+                            strokeDashoffset="25"
+                          />
+                        </svg>
+                        <span className="absolute text-xl font-bold font-mono text-zinc-100">{selectedSubmission.aiRiskScore || 0}%</span>
+                      </div>
 
-                  <span className={`inline-block text-[11px] font-bold px-3 py-1 rounded-full border ${
-                    (selectedSubmission.aiRiskScore || 0) >= 60 ? 'bg-rose-500/10 text-rose-400 border-rose-500/25' : 
-                    (selectedSubmission.aiRiskScore || 0) >= 30 ? 'bg-amber-500/10 text-amber-400 border-amber-500/25' : 
-                    'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
-                  }`}>
-                    {(selectedSubmission.aiRiskScore || 0) >= 60 ? 'CRITICAL DISHONESTY RISK' : 
-                     (selectedSubmission.aiRiskScore || 0) >= 30 ? 'SUSPICIOUS CAUTION' : 
-                     'TRUSTWORTHY PROFILE'}
-                  </span>
+                      <span className={`inline-block text-[11px] font-bold px-3 py-1 rounded-full border ${
+                        (selectedSubmission.aiRiskScore || 0) >= 60 ? 'bg-rose-500/10 text-rose-400 border-rose-500/25' : 
+                        (selectedSubmission.aiRiskScore || 0) >= 30 ? 'bg-amber-500/10 text-amber-400 border-amber-500/25' : 
+                        'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                      }`}>
+                        {(selectedSubmission.aiRiskScore || 0) >= 60 ? 'CRITICAL DISHONESTY RISK' : 
+                         (selectedSubmission.aiRiskScore || 0) >= 30 ? 'SUSPICIOUS CAUTION' : 
+                         'TRUSTWORTHY PROFILE'}
+                      </span>
+                    </>
+                  )}
                 </div>
 
                 {/* AI Proctor Summary (rendered beautifully) */}
@@ -673,7 +726,9 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
                   </h4>
 
                   <div className="p-4 bg-[#18181b] border border-zinc-800 rounded-xl max-h-[240px] overflow-y-auto text-zinc-300 text-[11px] leading-relaxed whitespace-pre-line font-sans prose prose-invert prose-sm">
-                    {selectedSubmission.aiProctoringSummary || 'IntegrityIQ cloud risk engine has not finalized calculations for this submission profile.'}
+                    {selectedSubmission.aiProctoringSummary === 'AI unavailable' 
+                      ? 'AI unavailable: Primary analyzer returned an operational failure or active API key limits. Please check credentials or review raw incident logs manually.'
+                      : (selectedSubmission.aiProctoringSummary || 'Aegis cloud risk engine has not finalized calculations for this submission profile.')}
                   </div>
                 </div>
 

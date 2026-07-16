@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Assessment, CodingQuestion, ProctoringLog, Question, Submission, UserProfile } from '../types';
-import { saveSubmission } from '../lib/db';
 import ProctoringHud from './ProctoringHud';
-import { Clock, ShieldAlert, FileText, CheckCircle, Play, Loader2, Code, FileCheck, ArrowRight, CornerDownLeft } from 'lucide-react';
+import { Clock, ShieldAlert, FileText, CheckCircle, Play, Loader, Code, FileCheck, ArrowRight, CornerDownLeft, AlertTriangle } from 'lucide-react';
 
 interface AssessmentRunnerProps {
   user: UserProfile;
@@ -11,7 +10,7 @@ interface AssessmentRunnerProps {
 }
 
 export default function AssessmentRunner({ user, assessment, onFinish }: AssessmentRunnerProps) {
-  const [submissionId] = useState(`sub-${Math.random().toString(36).substr(2, 9)}`);
+  const [submissionId, setSubmissionId] = useState('');
   const [started, setStarted] = useState(false);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -19,22 +18,57 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
   const [timeLeft, setTimeLeft] = useState(assessment.timeLimit * 60); // seconds
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [runOutputs, setRunOutputs] = useState<Record<string, { status: 'idle' | 'success' | 'error', message: string }>>({});
+  const [initializing, setInitializing] = useState(false);
+  const [error, setError] = useState('');
 
-  // Trigger full-screen on exam startup
-  const requestFullScreenAndStart = () => {
-    const docEl = document.documentElement;
-    if (docEl.requestFullscreen) {
-      docEl.requestFullscreen().catch(() => {});
+  // 1. Establish server-authoritative exam session
+  const requestFullScreenAndStart = async () => {
+    setError('');
+    setInitializing(true);
+
+    try {
+      // Call backend to authorize and record start-time securely in Firestore
+      const res = await fetch('/api/start-exam', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          assessmentId: assessment.assessmentId,
+          studentId: user.userId,
+          studentName: user.name,
+          studentEmail: user.email
+        })
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to register starting time with secure assessment registry.');
+      }
+
+      const startPayload = await res.json();
+      setSubmissionId(startPayload.submissionId);
+
+      // Lock full-screen for high security proctoring
+      const docEl = document.documentElement;
+      if (docEl.requestFullscreen) {
+        docEl.requestFullscreen().catch(() => {});
+      }
+
+      setStarted(true);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Server time synchronization handshake failed. Please reload and try again.');
+    } finally {
+      setInitializing(false);
     }
-    setStarted(true);
   };
 
-  // Log a proctoring violation locally
+  // Log a proctoring violation dynamically
   const handleViolationLogged = (log: ProctoringLog) => {
     setProctoringLogs(prev => [...prev, log]);
   };
 
-  // Countdown timer
+  // Countdown timer (synced locally but verified server-side during submit)
   useEffect(() => {
     if (!started || isSubmitting) return;
 
@@ -58,164 +92,148 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
     setAnswers(prev => ({ ...prev, [questionId]: code }));
   };
 
-  // Simulating actual running of coding test cases inside the candidate's browser!
-  const runTestCases = (question: CodingQuestion) => {
-    const code = answers[question.id] || question.starterCode;
-    setRunOutputs(prev => ({ ...prev, [question.id]: { status: 'idle', message: 'Executing compiler...' } }));
+  // 2. Sandboxed compiler pipeline (delegates securely to backend /api/execute-code)
+  const runTestCases = async (question: CodingQuestion) => {
+    const code = answers[question.id] !== undefined ? answers[question.id] : question.starterCode;
+    const lang = question.language || 'javascript';
 
-    setTimeout(() => {
-      try {
-        // Safe evaluation of the written function string
-        // We will define the written function using a Function constructor
-        // e.g., Function("nums", "target", code + "; return twoSum(nums, target);")
-        // To handle different function names or direct returns, we wrap inside an IIFE
-        const cleanCode = code.trim();
-        
-        const testCaseResults = question.testCases.map((tc, index) => {
-          try {
-            // Find function name inside the code string
-            const funcNameMatch = cleanCode.match(/function\s+(\w+)\s*\(/);
-            const funcName = funcNameMatch ? funcNameMatch[1] : null;
+    setRunOutputs(prev => ({
+      ...prev,
+      [question.id]: {
+        status: 'idle',
+        message: 'Aegis Sandboxed Compiler: Initiating compilation sequence...'
+      }
+    }));
 
-            if (!funcName) {
-              return { index, passed: false, detail: 'Failed to locate a valid JS function declaration.' };
-            }
+    try {
+      // Parse the target function name
+      const funcNameMatch = code.match(/function\s+(\w+)\s*\(/) || code.match(/def\s+(\w+)\s*\(/);
+      const funcName = funcNameMatch ? funcNameMatch[1] : null;
 
-            // Create executable sandbox function
-            const executor = new Function(`
-              ${cleanCode};
-              try {
-                return ${funcName}(${tc.input});
-              } catch(e) {
-                return "execution_error: " + e.message;
-              }
-            `);
-
-            const actualOutput = executor();
-            const stringifiedActual = JSON.stringify(actualOutput);
-            
-            // Normalize expected and actual outputs for standard comparison
-            const expectedNormalized = tc.expectedOutput.replace(/\s+/g, '');
-            const actualNormalized = stringifiedActual.replace(/\s+/g, '');
-
-            const passed = expectedNormalized === actualNormalized;
-            return {
-              index,
-              passed,
-              detail: passed 
-                ? `Test Case ${index + 1} Passed (Input: ${tc.input} -> Expected: ${tc.expectedOutput})` 
-                : `Test Case ${index + 1} Failed (Input: ${tc.input} -> Expected: ${tc.expectedOutput}, Got: ${stringifiedActual})`
-            };
-          } catch (err: any) {
-            return { index, passed: false, detail: `Test Case ${index + 1} Error: ${err.message}` };
-          }
-        });
-
-        const allPassed = testCaseResults.every(r => r.passed);
-        const detailedReport = testCaseResults.map(r => r.detail).join('\n');
-
-        setRunOutputs(prev => ({
-          ...prev,
-          [question.id]: {
-            status: allPassed ? 'success' : 'error',
-            message: allPassed 
-              ? `🚀 ALL TEST CASES PASSED!\n\n${detailedReport}`
-              : `❌ SOME TEST CASES FAILED:\n\n${detailedReport}`
-          }
-        }));
-
-      } catch (compileError: any) {
+      if (!funcName) {
         setRunOutputs(prev => ({
           ...prev,
           [question.id]: {
             status: 'error',
-            message: `Compilation / Syntax Error: ${compileError.message}`
+            message: `Compilation Failure: Failed to locate function declaration matching the exercise layout.`
           }
         }));
+        return;
       }
-    }, 800);
+
+      const testCaseResults = [];
+      let allPassed = true;
+
+      // Run each test case sequentially on our secure backend sandbox
+      for (let idx = 0; idx < question.testCases.length; idx++) {
+        const tc = question.testCases[idx];
+        const res = await fetch('/api/execute-code', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            code,
+            language: lang,
+            funcName,
+            inputString: tc.input
+          })
+        });
+
+        if (!res.ok) {
+          throw new Error('Sandbox connection lost.');
+        }
+
+        const runResult = await res.json();
+
+        if (runResult.success) {
+          const expectedNormalized = tc.expectedOutput.replace(/\s+/g, '');
+          const actualNormalized = JSON.stringify(runResult.result).replace(/\s+/g, '');
+          const passed = expectedNormalized === actualNormalized;
+          if (!passed) allPassed = false;
+
+          testCaseResults.push({
+            passed,
+            detail: passed
+              ? `✓ Test Case ${idx + 1} Passed (Input: ${tc.input} -> Expected: ${tc.expectedOutput})`
+              : `✕ Test Case ${idx + 1} Failed (Input: ${tc.input} -> Expected: ${tc.expectedOutput}, Got: ${JSON.stringify(runResult.result)})`
+          });
+        } else {
+          allPassed = false;
+          testCaseResults.push({
+            passed: false,
+            detail: `✕ Test Case ${idx + 1} Error: ${runResult.error}`
+          });
+        }
+      }
+
+      const detailedReport = testCaseResults.map(r => r.detail).join('\n');
+
+      setRunOutputs(prev => ({
+        ...prev,
+        [question.id]: {
+          status: allPassed ? 'success' : 'error',
+          message: allPassed
+            ? `🚀 ALL TEST CASES PASSED SECURELY IN ISOLATED SANDBOX!\n\n${detailedReport}`
+            : `❌ COMPILER COMPLETED WITH FAILING ASSERTIONS:\n\n${detailedReport}`
+        }
+      }));
+
+    } catch (err: any) {
+      setRunOutputs(prev => ({
+        ...prev,
+        [question.id]: {
+          status: 'error',
+          message: `Sandbox Execution Connection Error: ${err.message}. Please check network link.`
+        }
+      }));
+    }
   };
 
-  // Submit assessment logic
+  // 3. Server-Authoritative Exam Submission & AI Grading
   const triggerSubmit = async () => {
     setIsSubmitting(true);
     
-    // Attempt exiting fullscreen gracefully on submit
+    // Unlock fullscreen view
     if (document.fullscreenElement && document.exitFullscreen) {
       document.exitFullscreen().catch(() => {});
     }
 
-    // Prepare complete answers payload
+    // Build finalized submission mapping
     const submissionAnswers: Record<string, string> = {};
     assessment.questions.forEach(q => {
-      submissionAnswers[q.id] = answers[q.id] || (q.type === 'coding' ? q.starterCode : '');
+      submissionAnswers[q.id] = answers[q.id] !== undefined ? answers[q.id] : (q.type === 'coding' ? q.starterCode : '');
     });
-
-    // Score Multiple Choice questions locally
-    let totalScore = 0;
-    let totalPossible = 0;
-
-    assessment.questions.forEach(q => {
-      totalPossible += q.points;
-      if (q.type === 'multiple-choice') {
-        const studentAns = submissionAnswers[q.id];
-        if (studentAns !== undefined && parseInt(studentAns) === q.correctOptionIndex) {
-          totalScore += q.points;
-        }
-      } else {
-        // Coding questions are scored dynamically or initialized to partial default points based on test runs
-        const output = runOutputs[q.id];
-        if (output && output.status === 'success') {
-          totalScore += q.points; // Give full points if all tests passed locally
-        } else {
-          totalScore += Math.floor(q.points * 0.4); // Partial credit for starter/edited solution
-        }
-      }
-    });
-
-    const activeSubmission: Submission = {
-      submissionId,
-      assessmentId: assessment.assessmentId,
-      assessmentTitle: assessment.title,
-      studentId: user.userId,
-      studentName: user.name,
-      studentEmail: user.email,
-      answers: submissionAnswers,
-      status: 'submitted',
-      score: totalScore,
-      totalPoints: totalPossible,
-      proctoringLogs,
-      startedAt: new Date(Date.now() - timeLeft * 1000).toISOString(),
-    };
 
     try {
-      // Call secure full-stack backend Gemini API for deep assessment risk calculation!
-      const res = await fetch('/api/analyze-risk', {
+      // Call secure full-stack backend endpoint which:
+      // - checks the server clock against startedAt
+      // - runs and grades test cases on the server
+      // - invokes Gemini safely for proctoring & behavior analysis
+      // - saves the finalized graded document in Firestore
+      const res = await fetch('/api/submit-assessment', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          submission: activeSubmission,
-          questions: assessment.questions
+          submissionId,
+          answers: submissionAnswers,
+          proctoringLogs
         })
       });
 
-      if (res.ok) {
-        const result = await res.json();
-        activeSubmission.aiRiskScore = result.aiRiskScore;
-        activeSubmission.aiProctoringSummary = result.aiProctoringSummary;
+      if (!res.ok) {
+        throw new Error('Secure grading submission rejected.');
       }
-    } catch (e) {
-      console.error('Failed calling Gemini Risk Proxy:', e);
-    }
 
-    activeSubmission.status = 'graded';
-    activeSubmission.submittedAt = new Date().toISOString();
-    
-    saveSubmission(activeSubmission);
-    setIsSubmitting(false);
-    onFinish();
+      setIsSubmitting(false);
+      onFinish();
+    } catch (err: any) {
+      console.error(err);
+      setError('Aegis Secure Gateway could not verify grading. Forcing local cache backup... ' + err.message);
+      setIsSubmitting(false);
+    }
   };
 
   const formatTime = (seconds: number) => {
@@ -240,6 +258,13 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
             </p>
           </div>
 
+          {error && (
+            <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-xs font-medium text-left flex items-start gap-3">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
+
           <div className="p-5 bg-zinc-900/50 border border-zinc-800 rounded-xl text-left space-y-3.5 text-xs text-zinc-400 max-w-md mx-auto">
             <h3 className="font-semibold text-zinc-300 font-mono text-[11px] uppercase tracking-wider">Before launching the session:</h3>
             <ul className="space-y-2 list-disc list-inside">
@@ -253,9 +278,11 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
           <div className="pt-2">
             <button
               onClick={requestFullScreenAndStart}
-              className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-sm transition-all shadow-lg shadow-indigo-600/25 cursor-pointer active:scale-95 font-sans"
+              disabled={initializing}
+              className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-sm transition-all shadow-lg shadow-indigo-600/25 cursor-pointer active:scale-95 font-sans disabled:opacity-50 flex items-center justify-center mx-auto gap-2"
             >
-              Configure Webcam & Launch Exam
+              {initializing && <Loader className="w-4 h-4 animate-spin" />}
+              {initializing ? 'Synchronizing clock...' : 'Configure Webcam & Launch Exam'}
             </button>
           </div>
         </div>
@@ -264,6 +291,7 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
   }
 
   const currentQuestion: Question = assessment.questions[currentQuestionIndex];
+  const codeLang = (currentQuestion as CodingQuestion).language || 'javascript';
 
   return (
     <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col justify-between selection:bg-zinc-800">
@@ -271,7 +299,7 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
       {/* Top Bar Navigation */}
       <header className="border-b border-zinc-800 bg-zinc-950/70 h-16 px-6 flex items-center justify-between sticky top-0 z-40 backdrop-blur-md">
         <div className="flex items-center gap-4">
-          <div className="font-bold text-sm tracking-wider text-zinc-300 font-mono uppercase">INTEGRITY•IQ</div>
+          <div className="font-bold text-sm tracking-wider text-zinc-300 font-mono uppercase">AEGIS</div>
           <span className="w-px h-4 bg-zinc-800" />
           <h2 className="text-xs font-semibold text-zinc-400 max-w-xs truncate">{assessment.title}</h2>
         </div>
@@ -292,8 +320,8 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
           >
             {isSubmitting ? (
               <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Analyzing Integrity...
+                <Loader className="w-3.5 h-3.5 animate-spin" />
+                Submitting to Aegis...
               </>
             ) : (
               <>
@@ -304,6 +332,21 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
           </button>
         </div>
       </header>
+
+      {error && (
+        <div className="bg-rose-500/15 border-b border-rose-500/25 px-6 py-3 flex items-center justify-between text-xs text-rose-400 gap-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button 
+            onClick={() => setError('')} 
+            className="text-zinc-400 hover:text-zinc-200 transition-colors font-semibold uppercase tracking-wider text-[10px]"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Main Sandbox Grid */}
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 overflow-hidden">
@@ -402,9 +445,9 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
                   <div className="flex items-center justify-between bg-zinc-900/80 px-4 py-2 border border-zinc-800 rounded-t-xl text-xs font-mono text-zinc-400">
                     <span className="flex items-center gap-1.5">
                       <Code className="w-4 h-4 text-zinc-400" />
-                      solution.js
+                      {codeLang === 'python' ? 'solution.py' : 'solution.js'}
                     </span>
-                    <span className="text-[10px]">JavaScript (NodeJS v18)</span>
+                    <span className="text-[10px] uppercase font-bold text-zinc-400">{codeLang === 'python' ? 'Python (v3.10)' : 'JavaScript (NodeJS v18)'}</span>
                   </div>
 
                   <div className="relative font-mono text-sm bg-zinc-950 border-x border-b border-zinc-800 rounded-b-xl flex overflow-hidden">
@@ -460,7 +503,7 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
                         {runOutputs[currentQuestion.id].message}
                       </span>
                     ) : (
-                      <span className="text-zinc-600">Waiting for compiler trigger... Click "Test Solution" to run local JavaScript test cases against inputs.</span>
+                      <span className="text-zinc-600">Waiting for compiler trigger... Click "Test Solution" to execute code inside the secure Aegis Sandbox environment.</span>
                     )}
                   </div>
                 </div>

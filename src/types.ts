@@ -6,6 +6,7 @@ export interface UserProfile {
   email: string;
   role: UserRole;
   createdAt: string;
+  password?: string;
 }
 
 export type QuestionType = 'multiple-choice' | 'coding';
@@ -27,6 +28,7 @@ export interface CodingQuestion extends BaseQuestion {
   type: 'coding';
   starterCode: string;
   testCases: { input: string; expectedOutput: string }[];
+  language?: 'javascript' | 'python';
 }
 
 export type Question = MultipleChoiceQuestion | CodingQuestion;

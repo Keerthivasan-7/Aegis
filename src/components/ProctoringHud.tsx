@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ProctoringLog } from '../types';
 import { Camera, Shield, Eye, AlertCircle, RefreshCw } from 'lucide-react';
+import * as faceapi from '@vladmandic/face-api';
 
 interface ProctoringHudProps {
   onViolationLogged: (log: ProctoringLog) => void;
@@ -15,6 +16,44 @@ export default function ProctoringHud({ onViolationLogged, isActive }: Proctorin
   const [eyeGazeStatus, setEyeGazeStatus] = useState<'Focused' | 'Departed'>('Focused');
   const [presenceStatus, setPresenceStatus] = useState<'Present' | 'Unattended' | 'Multiple Faces'>('Present');
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+
+  // Refs for tracking real detection data smoothly
+  const latestDetectionRef = useRef<{
+    box: { x: number; y: number; width: number; height: number } | null;
+    landmarks: any | null;
+    isLookingAway: boolean;
+    presence: 'Present' | 'Unattended' | 'Multiple Faces';
+  }>({
+    box: null,
+    landmarks: null,
+    isLookingAway: false,
+    presence: 'Unattended',
+  });
+
+  const lastLookAwayLogRef = useRef<number>(0);
+  const lastFaceMissingLogRef = useRef<number>(0);
+  const lastMultipleFacesLogRef = useRef<number>(0);
+
+  // Load face-api models
+  useEffect(() => {
+    let active = true;
+    const loadModels = async () => {
+      try {
+        await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
+        await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
+        if (active) {
+          setModelsLoaded(true);
+        }
+      } catch (err) {
+        console.error('Failed to load face-api models:', err);
+      }
+    };
+    loadModels();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Trigger camera connection
   useEffect(() => {
@@ -89,7 +128,6 @@ export default function ProctoringHud({ onViolationLogged, isActive }: Proctorin
     if (!isActive) return;
 
     const handlePaste = (e: ClipboardEvent) => {
-      // Prevent actual pasting in candidate inputs to stop cheating
       e.preventDefault();
       onViolationLogged({
         timestamp: new Date().toISOString(),
@@ -103,6 +141,116 @@ export default function ProctoringHud({ onViolationLogged, isActive }: Proctorin
       document.removeEventListener('paste', handlePaste);
     };
   }, [isActive, onViolationLogged]);
+
+  // Real face detection loop running every 1.5 seconds
+  useEffect(() => {
+    if (!isActive || !streamActive || !modelsLoaded) return;
+
+    let timerId: any;
+
+    const runDetection = async () => {
+      const video = videoRef.current;
+      if (!video || video.paused || video.ended || video.readyState < 4 || !video.videoWidth || !video.videoHeight || video.currentTime === 0) {
+        // Not ready yet, schedule next check
+        timerId = setTimeout(runDetection, 1500);
+        return;
+      }
+
+      try {
+        const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.5 });
+        const detections = await faceapi.detectAllFaces(video, options).withFaceLandmarks();
+
+        const timestamp = new Date().toISOString();
+
+        if (detections.length === 0) {
+          latestDetectionRef.current = {
+            box: null,
+            landmarks: null,
+            isLookingAway: false,
+            presence: 'Unattended',
+          };
+          setPresenceStatus('Unattended');
+          setEyeGazeStatus('Departed');
+
+          if (Date.now() - lastFaceMissingLogRef.current > 5000) {
+            onViolationLogged({
+              timestamp,
+              type: 'face-missing',
+              details: 'Webcam feed reports candidate absent from assessment frame.'
+            });
+            lastFaceMissingLogRef.current = Date.now();
+          }
+        } else if (detections.length === 1) {
+          const det = detections[0];
+          const landmarks = det.landmarks;
+
+          // Estimate head direction using facial landmarks
+          const jawLeft = landmarks.positions[0];
+          const jawRight = landmarks.positions[16];
+          const noseTip = landmarks.positions[30];
+
+          const dLeft = Math.abs(noseTip.x - jawLeft.x);
+          const dRight = Math.abs(jawRight.x - noseTip.x);
+          const ratio = dLeft / dRight;
+
+          // Standard look away threshold
+          const isLookingAway = ratio < 0.45 || ratio > 2.2;
+
+          latestDetectionRef.current = {
+            box: det.detection.box,
+            landmarks,
+            isLookingAway,
+            presence: 'Present',
+          };
+
+          setPresenceStatus('Present');
+          if (isLookingAway) {
+            setEyeGazeStatus('Departed');
+            if (Date.now() - lastLookAwayLogRef.current > 5000) {
+              onViolationLogged({
+                timestamp,
+                type: 'look-away',
+                details: 'Gaze departed from the examination environment temporarily.'
+              });
+              lastLookAwayLogRef.current = Date.now();
+            }
+          } else {
+            setEyeGazeStatus('Focused');
+          }
+        } else {
+          // Multiple faces
+          latestDetectionRef.current = {
+            box: detections[0].detection.box,
+            landmarks: detections[0].landmarks,
+            isLookingAway: true,
+            presence: 'Multiple Faces',
+          };
+          setPresenceStatus('Multiple Faces');
+          setEyeGazeStatus('Departed');
+
+          if (Date.now() - lastMultipleFacesLogRef.current > 5000) {
+            onViolationLogged({
+              timestamp,
+              type: 'multiple-faces',
+              details: 'Multiple faces detected in the camera frame.'
+            });
+            lastMultipleFacesLogRef.current = Date.now();
+          }
+        }
+      } catch (err) {
+        console.error('Face detection error:', err);
+      }
+
+      // Schedule next check
+      timerId = setTimeout(runDetection, 1500);
+    };
+
+    timerId = setTimeout(runDetection, 1000);
+
+    return () => {
+      clearTimeout(timerId);
+    };
+  }, [isActive, streamActive, modelsLoaded, onViolationLogged]);
 
   // Canvas drawing loop for the dynamic visual cybernetic tracking overlays!
   useEffect(() => {
@@ -128,7 +276,7 @@ export default function ProctoringHud({ onViolationLogged, isActive }: Proctorin
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       // Draw horizontal target crosshairs
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(0, canvas.height / 2);
@@ -137,103 +285,11 @@ export default function ProctoringHud({ onViolationLogged, isActive }: Proctorin
       ctx.lineTo(canvas.width / 2, canvas.height);
       ctx.stroke();
 
-      // Draw bounding box tracker around mock face coordinates
       cycleCount++;
-      const basePulse = Math.sin(cycleCount * 0.05);
 
-      // Let's dynamically simulate gaze fluctuations (looking off-screen randomly or periodically)
-      const isOffGazeSim = (cycleCount % 400) > 340;
-      const isAbsentSim = (cycleCount % 1200) > 1140;
+      const detection = latestDetectionRef.current;
 
-      if (isAbsentSim) {
-        setPresenceStatus('Unattended');
-        setEyeGazeStatus('Departed');
-      } else {
-        setPresenceStatus('Present');
-        if (isOffGazeSim) {
-          setEyeGazeStatus('Departed');
-        } else {
-          setEyeGazeStatus('Focused');
-        }
-      }
-
-      // If active eye state changes, periodically log to prevent pure visual fake state
-      if (cycleCount % 400 === 341) {
-        onViolationLogged({
-          timestamp: new Date().toISOString(),
-          type: 'look-away',
-          details: 'Gaze departed from the examination environment temporarily.'
-        });
-      }
-      if (cycleCount % 1200 === 1141) {
-        onViolationLogged({
-          timestamp: new Date().toISOString(),
-          type: 'face-missing',
-          details: 'Webcam feed reports candidate absent from assessment frame.'
-        });
-      }
-
-      // Draw facial tracking coordinate overlays
-      if (!isAbsentSim) {
-        const x = canvas.width / 2 + Math.sin(cycleCount * 0.02) * 15;
-        const y = canvas.height / 2 - 10 + Math.cos(cycleCount * 0.01) * 8;
-        const boxWidth = 100 + basePulse * 3;
-        const boxHeight = 115 + basePulse * 3;
-
-        // Face outline box
-        ctx.strokeStyle = isOffGazeSim ? 'rgba(239, 68, 68, 0.7)' : 'rgba(16, 185, 129, 0.6)';
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(x - boxWidth / 2, y - boxHeight / 2, boxWidth, boxHeight);
-
-        // Corner guides
-        ctx.fillStyle = isOffGazeSim ? '#ef4444' : '#10b981';
-        const guideLen = 10;
-        // Top-left
-        ctx.fillRect(x - boxWidth / 2 - 1, y - boxHeight / 2 - 1, guideLen, 2.5);
-        ctx.fillRect(x - boxWidth / 2 - 1, y - boxHeight / 2 - 1, 2.5, guideLen);
-        // Top-right
-        ctx.fillRect(x + boxWidth / 2 - guideLen + 1, y - boxHeight / 2 - 1, guideLen, 2.5);
-        ctx.fillRect(x + boxWidth / 2 - 1.5, y - boxHeight / 2 - 1, 2.5, guideLen);
-        // Bottom-left
-        ctx.fillRect(x - boxWidth / 2 - 1, y + boxHeight / 2 - 1.5, guideLen, 2.5);
-        ctx.fillRect(x - boxWidth / 2 - 1, y + boxHeight / 2 - guideLen + 1, 2.5, guideLen);
-        // Bottom-right
-        ctx.fillRect(x + boxWidth / 2 - guideLen + 1, y + boxHeight / 2 - 1.5, guideLen, 2.5);
-        ctx.fillRect(x + boxWidth / 2 - 1.5, y + boxHeight / 2 - guideLen + 1, 2.5, guideLen);
-
-        // Gaze tracking eye points
-        ctx.beginPath();
-        ctx.arc(x - 20, y - 15, 4, 0, Math.PI * 2);
-        ctx.arc(x + 20, y - 15, 4, 0, Math.PI * 2);
-        ctx.fillStyle = isOffGazeSim ? 'rgba(239, 68, 68, 0.9)' : 'rgba(16, 185, 129, 0.9)';
-        ctx.fill();
-
-        // Gaze angle vector
-        if (isOffGazeSim) {
-          ctx.strokeStyle = '#ef4444';
-          ctx.beginPath();
-          ctx.moveTo(x - 20, y - 15);
-          ctx.lineTo(x - 50, y - 25);
-          ctx.moveTo(x + 20, y - 15);
-          ctx.lineTo(x + 50, y - 25);
-          ctx.stroke();
-        }
-
-        // Indicator tag
-        ctx.fillStyle = isOffGazeSim ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.1)';
-        ctx.fillRect(x - 45, y + boxHeight / 2 + 10, 90, 16);
-        ctx.strokeStyle = isOffGazeSim ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.4)';
-        ctx.strokeRect(x - 45, y + boxHeight / 2 + 10, 90, 16);
-        
-        ctx.fillStyle = isOffGazeSim ? '#fca5a5' : '#a7f3d0';
-        ctx.font = '9px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(
-          isOffGazeSim ? 'GAZE DEPARTED' : 'GAZE LOGGED',
-          x,
-          y + boxHeight / 2 + 21
-        );
-      } else {
+      if (detection.presence === 'Unattended') {
         // Missing state scanning line
         ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
         ctx.lineWidth = 2;
@@ -252,6 +308,97 @@ export default function ProctoringHud({ onViolationLogged, isActive }: Proctorin
         ctx.font = '10px monospace';
         ctx.textAlign = 'center';
         ctx.fillText('WARNING: FACE DETECT ABSENT', canvas.width / 2, canvas.height / 2 + 4);
+      } else {
+        // We have a face! Draw the box and landmarks
+        const isLookingAway = detection.isLookingAway;
+        const hasMultiple = detection.presence === 'Multiple Faces';
+
+        // Corner guides and face box
+        if (detection.box && typeof detection.box.x === 'number' && typeof detection.box.y === 'number' && typeof detection.box.width === 'number' && typeof detection.box.height === 'number' && !isNaN(detection.box.x) && !isNaN(detection.box.y)) {
+          const { x, y, width, height } = detection.box;
+
+          // Face outline box
+          ctx.strokeStyle = isLookingAway ? 'rgba(239, 68, 68, 0.7)' : 'rgba(16, 185, 129, 0.6)';
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(x, y, width, height);
+
+          // Corner guides
+          ctx.fillStyle = isLookingAway ? '#ef4444' : '#10b981';
+          const guideLen = 12;
+          // Top-left
+          ctx.fillRect(x - 1, y - 1, guideLen, 2.5);
+          ctx.fillRect(x - 1, y - 1, 2.5, guideLen);
+          // Top-right
+          ctx.fillRect(x + width - guideLen + 1, y - 1, guideLen, 2.5);
+          ctx.fillRect(x + width - 1.5, y - 1, 2.5, guideLen);
+          // Bottom-left
+          ctx.fillRect(x - 1, y + height - 1.5, guideLen, 2.5);
+          ctx.fillRect(x - 1, y + height - guideLen + 1, 2.5, guideLen);
+          // Bottom-right
+          ctx.fillRect(x + width - guideLen + 1, y + height - 1.5, guideLen, 2.5);
+          ctx.fillRect(x + width - 1.5, y + height - guideLen + 1, 2.5, guideLen);
+
+          // Gaze tracking eye points using real landmarks
+          const landmarks = detection.landmarks;
+          if (landmarks) {
+            const leftEye = landmarks.getLeftEye();
+            const rightEye = landmarks.getRightEye();
+
+            // Calculate centers
+            let lex = 0, ley = 0;
+            leftEye.forEach((p: any) => { lex += p.x; ley += p.y; });
+            lex /= leftEye.length;
+            ley /= leftEye.length;
+
+            let rex = 0, rey = 0;
+            rightEye.forEach((p: any) => { rex += p.x; rey += p.y; });
+            rex /= rightEye.length;
+            rey /= rightEye.length;
+
+            ctx.beginPath();
+            ctx.arc(lex, ley, 3.5, 0, Math.PI * 2);
+            ctx.arc(rex, rey, 3.5, 0, Math.PI * 2);
+            ctx.fillStyle = isLookingAway ? 'rgba(239, 68, 68, 0.9)' : 'rgba(16, 185, 129, 0.9)';
+            ctx.fill();
+
+            // Gaze angle vector
+            if (isLookingAway) {
+              ctx.strokeStyle = '#ef4444';
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              // estimate look-away direction vector
+              const nose = landmarks.getNose();
+              const noseTip = nose[3]; // nose tip point
+              const jawLeft = landmarks.getJawOutline()[0];
+              const jawRight = landmarks.getJawOutline()[16];
+              const dLeft = Math.abs(noseTip.x - jawLeft.x);
+              const dRight = Math.abs(jawRight.x - noseTip.x);
+              const isLeftDir = dLeft < dRight;
+              
+              const dx = isLeftDir ? -35 : 35;
+              ctx.moveTo(lex, ley);
+              ctx.lineTo(lex + dx, ley - 10);
+              ctx.moveTo(rex, rey);
+              ctx.lineTo(rex + dx, rey - 10);
+              ctx.stroke();
+            }
+          }
+
+          // Indicator tag
+          ctx.fillStyle = isLookingAway ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.1)';
+          ctx.fillRect(x + width / 2 - 50, y + height + 10, 100, 16);
+          ctx.strokeStyle = isLookingAway ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.4)';
+          ctx.strokeRect(x + width / 2 - 50, y + height + 10, 100, 16);
+          
+          ctx.fillStyle = isLookingAway ? '#fca5a5' : '#a7f3d0';
+          ctx.font = '9px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(
+            hasMultiple ? 'PEOPLE FLAGGED' : isLookingAway ? 'GAZE DEPARTED' : 'GAZE LOGGED',
+            x + width / 2,
+            y + height + 21
+          );
+        }
       }
 
       animId = requestAnimationFrame(drawOverlay);
@@ -259,14 +406,14 @@ export default function ProctoringHud({ onViolationLogged, isActive }: Proctorin
 
     animId = requestAnimationFrame(drawOverlay);
     return () => cancelAnimationFrame(animId);
-  }, [isActive, streamActive, onViolationLogged]);
+  }, [isActive, streamActive]);
 
   return (
     <div className="bg-[#121214] border border-zinc-800 rounded-xl p-4 space-y-4 shadow-xl">
       <div className="flex justify-between items-center pb-2 border-b border-zinc-800/80">
         <div className="flex items-center gap-2">
           <Shield className="w-4 h-4 text-emerald-400" />
-          <span className="text-xs font-semibold text-zinc-200">Active Integrity HUD</span>
+          <span className="text-xs font-semibold text-zinc-200">Active Aegis HUD</span>
         </div>
         <span className="flex items-center gap-1">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -290,7 +437,7 @@ export default function ProctoringHud({ onViolationLogged, isActive }: Proctorin
               playsInline 
               className="absolute inset-0 w-full h-full object-cover opacity-60 scale-x-[-1]"
             />
-            {/* Scanning cybernetic graphics canvas */}
+            {/* Scanning graphics canvas */}
             <canvas 
               ref={canvasRef} 
               className="absolute inset-0 w-full h-full object-cover scale-x-[-1]"

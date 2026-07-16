@@ -97,7 +97,7 @@ export const INITIAL_ASSESSMENTS: Assessment[] = [
 }`,
         testCases: [
           { input: '"hello world"', expectedOutput: '"world hello"' },
-          { input: '"IntegrityIQ is awesome"', expectedOutput: '"awesome is IntegrityIQ"' }
+          { input: '"Aegis is awesome"', expectedOutput: '"awesome is Aegis"' }
         ]
       }
     ]
