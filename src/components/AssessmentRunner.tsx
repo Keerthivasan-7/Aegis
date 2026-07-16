@@ -4,6 +4,7 @@ import ProctoringHud from './ProctoringHud';
 import ViolationWarningModal from './ViolationWarningModal';
 import { Clock, ShieldAlert, FileText, CheckCircle, Play, Loader, Code, FileCheck, ArrowRight, CornerDownLeft, AlertTriangle, Volume2, VolumeX } from 'lucide-react';
 import { auth } from '../lib/firebase';
+import { AegisLogo } from './AegisLogo';
 
 interface AssessmentRunnerProps {
   user: UserProfile;
@@ -790,7 +791,10 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
       {/* Top Bar Navigation */}
       <header className="border-b border-zinc-800 bg-zinc-950/70 h-16 px-6 flex items-center justify-between sticky top-0 z-40 backdrop-blur-md">
         <div className="flex items-center gap-4">
-          <div className="font-bold text-sm tracking-wider text-zinc-300 font-mono uppercase">AEGIS</div>
+          <div className="flex items-center gap-2">
+            <AegisLogo size={28} />
+            <span className="font-display font-semibold tracking-tight text-sm text-zinc-100">Aegis</span>
+          </div>
           <span className="w-px h-4 bg-zinc-800" />
           <h2 className="text-xs font-semibold text-zinc-400 max-w-xs truncate">{assessment.title}</h2>
         </div>

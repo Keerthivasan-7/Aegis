@@ -227,7 +227,11 @@ export default function AuthGate({ onAuthSuccess }: AuthGateProps) {
       }
     } catch (err: any) {
       console.error('Authentication Error:', err);
-      if (err.code === 'auth/configuration-not-found' || err.message?.includes('configuration-not-found')) {
+      if (err.code === 'auth/api-key-not-valid') {
+        setError('Firebase API key is not valid. Configure a valid Firebase project in your .env file, or use the local sandbox credentials below. Page will reload to enable sandbox mode.');
+        localStorage.removeItem('aegis_local_session');
+        setTimeout(() => window.location.reload(), 3000);
+      } else if (err.code === 'auth/configuration-not-found' || err.message?.includes('configuration-not-found')) {
         setShowConfigTroubleshooter(true);
         setError('Email & Password Auth is not enabled in your Firebase project.');
       } else if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {

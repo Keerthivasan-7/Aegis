@@ -13,12 +13,32 @@ const firebaseConfig = {
   appId: (import.meta as any).env.VITE_FIREBASE_APP_ID || "1:000000000000:web:0000000000000"
 };
 
+// Guard: only initialize Firebase when a real API key is provided
+const isValidKey =
+  firebaseConfig.apiKey !== "fallback_placeholder_key" &&
+  firebaseConfig.apiKey.startsWith('AIza');
+
 // Initialize app
-export const app = initializeApp(firebaseConfig);
+let app: any = null;
+if (isValidKey) {
+  try {
+    app = initializeApp(firebaseConfig);
+  } catch (e) {
+    console.warn('Firebase initialization failed, falling back to local sandbox mode:', e);
+    app = null;
+  }
+} else {
+  console.warn('No valid Firebase API key detected — running in local sandbox mode.');
+}
 
-// Initialize core services
-export const auth = getAuth(app);
-setPersistence(auth, browserLocalPersistence).catch(e => console.error("Persistence setting failed:", e));
+export { app };
 
-export const db = getFirestore(app);
-export const storage = getStorage(app);
+// Initialize core services (null-safe: consumers guard via isFirestoreAvailable / isUsingLocalSandbox)
+export const auth = app ? getAuth(app) : null as any;
+if (auth) {
+  setPersistence(auth, browserLocalPersistence).catch(e => console.error("Persistence setting failed:", e));
+}
+
+export const db = app ? getFirestore(app) : null as any;
+export const storage = app ? getStorage(app) : null as any;
+

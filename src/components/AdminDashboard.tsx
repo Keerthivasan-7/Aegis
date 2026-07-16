@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { AegisLogo } from './AegisLogo';
 import { Assessment, Question, Submission, UserProfile } from '../types';
 import { getAssessments, getSubmissions, saveAssessment, isUsingLocalSandbox } from '../lib/db';
 import { RiskDistributionChart, ViolationBreakdownChart } from './CustomCharts';
@@ -151,9 +152,7 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
       <header className="border-b border-zinc-800/80 bg-zinc-950/60 backdrop-blur-md sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-md shadow-indigo-600/20">
-              <span className="text-sm font-display tracking-wider">AE</span>
-            </div>
+            <AegisLogo size={32} />
             <span className="font-display font-semibold tracking-tight text-md text-zinc-100">Aegis</span>
             <span className="text-[10px] bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-zinc-400 font-mono font-medium">Examiner Dashboard</span>
             {isUsingLocalSandbox() && (

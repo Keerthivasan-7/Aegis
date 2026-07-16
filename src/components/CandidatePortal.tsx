@@ -3,6 +3,7 @@ import { Assessment, Submission, UserProfile } from '../types';
 import { getAssessments, getSubmissionsForStudent, isUsingLocalSandbox } from '../lib/db';
 import { BookOpen, Calendar, Clock, Award, ShieldAlert, CheckCircle, FileCode, Play, Loader, AlertTriangle, User } from 'lucide-react';
 import CandidateProfile from './CandidateProfile';
+import { AegisLogo } from './AegisLogo';
 
 interface CandidatePortalProps {
   user: UserProfile;
@@ -49,9 +50,7 @@ export default function CandidatePortal({ user, onSelectAssessment, onLogout, on
       <header className="border-b border-zinc-900 bg-zinc-950/70 backdrop-blur-md sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-white shadow-md shadow-indigo-600/20">
-              <span className="text-sm font-display tracking-wider">AE</span>
-            </div>
+            <AegisLogo size={32} />
             <span className="font-display font-semibold tracking-tight text-md text-zinc-100">Aegis</span>
             <span className="text-[10px] bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-zinc-400 font-mono font-medium">Candidate Portal</span>
             {isUsingLocalSandbox() && (
