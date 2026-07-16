@@ -1,64 +1,66 @@
 import React, { useEffect, useState } from 'react';
-import { Assessment, UserProfile } from './types';
-import { getUserProfile } from './lib/db';
 import { onAuthStateChanged } from 'firebase/auth';
+import { Loader } from 'lucide-react';
+
+import { Assessment, UserProfile } from './types';
 import { auth } from './lib/firebase';
+import { getUserProfile, validateFirebaseConnection } from './lib/db';
+
+import LandingPage from './components/landing/LandingPage';
 import AuthGate from './components/AuthGate';
 import CandidatePortal from './components/CandidatePortal';
 import AssessmentRunner from './components/AssessmentRunner';
 import AdminDashboard from './components/AdminDashboard';
-import LandingPage from './components/landing/LandingPage';
-import { Loader } from 'lucide-react';
 
 export default function App() {
-  const [currentUser, setCurrentUserState] = useState<UserProfile | null>(null);
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
   const [activeAssessment, setActiveAssessment] = useState<Assessment | null>(null);
   const [loading, setLoading] = useState(true);
   const [showLanding, setShowLanding] = useState(true);
 
-  // Synchronize with active Firebase Auth session state or local session
   useEffect(() => {
-    const initAuth = async () => {
+    let active = true;
+    let unsubscribe: (() => void) | undefined;
+
+    const initialize = async () => {
       try {
         setLoading(true);
 
-        const { validateFirebaseConnection } = await import('./lib/db');
+        // Verify Firebase configuration
         await validateFirebaseConnection();
 
-        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+        unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
           try {
+            if (!active) return;
+
             if (firebaseUser) {
               const profile = await getUserProfile(firebaseUser.uid);
 
-              if (active) {
-                if (profile) {
-                  setCurrentUserState(profile);
-                } else {
-                  setCurrentUserState({
-                    userId: firebaseUser.uid,
-                    name: firebaseUser.displayName || 'Candidate',
-                    email: firebaseUser.email || '',
-                    role: 'student',
-                    createdAt: new Date().toISOString(),
-                  });
-                }
+              if (profile) {
+                setCurrentUser(profile);
+              } else {
+                setCurrentUser({
+                  userId: firebaseUser.uid,
+                  name: firebaseUser.displayName || 'Candidate',
+                  email: firebaseUser.email || '',
+                  role: 'student',
+                  createdAt: new Date().toISOString(),
+                });
               }
-            } else if (active) {
-              setCurrentUserState(null);
+            } else {
+              setCurrentUser(null);
               setActiveAssessment(null);
             }
-          } catch (err) {
-            console.error("Auth state change error:", err);
+          } catch (error) {
+            console.error('Auth state error:', error);
           } finally {
             if (active) {
               setLoading(false);
             }
           }
         });
-
-        return unsubscribe;
-      } catch (err) {
-        console.error("Failed to initialize auth layer:", err);
+      } catch (error) {
+        console.error('Failed to initialize Firebase:', error);
 
         if (active) {
           setLoading(false);
@@ -66,29 +68,29 @@ export default function App() {
       }
     };
 
-    let fbUnsubscribe: (() => void) | undefined;
-    initAuth().then((unsub) => {
-      if (unsub) fbUnsubscribe = unsub;
-    });
+    initialize();
 
     return () => {
       active = false;
-      if (fbUnsubscribe) fbUnsubscribe();
+
+      if (unsubscribe) {
+        unsubscribe();
+      }
     };
   }, []);
 
   const handleAuthSuccess = (user: UserProfile) => {
-    setCurrentUserState(user);
+    setCurrentUser(user);
   };
 
   const handleLogout = async () => {
     try {
       await auth.signOut();
       localStorage.removeItem('aegis_local_session');
-      setCurrentUserState(null);
+      setCurrentUser(null);
       setActiveAssessment(null);
-    } catch (e) {
-      console.error("Logout failure:", e);
+    } catch (error) {
+      console.error('Logout failed:', error);
     }
   };
 
@@ -106,38 +108,34 @@ export default function App() {
   }
 
   if (!currentUser) {
-    if (showLanding) {
-      return <LandingPage onLogin={() => setShowLanding(false)} />;
-    }
-    return <AuthGate onAuthSuccess={handleAuthSuccess} />;
+    return showLanding ? (
+      <LandingPage onLogin={() => setShowLanding(false)} />
+    ) : (
+      <AuthGate onAuthSuccess={handleAuthSuccess} />
+    );
   }
 
   if (currentUser.role === 'student') {
-    if (activeAssessment) {
-      return (
-        <AssessmentRunner
-          user={currentUser}
-          assessment={activeAssessment}
-          onFinish={handleFinishAssessment}
-        />
-      );
-    }
-    return (
+    return activeAssessment ? (
+      <AssessmentRunner
+        user={currentUser}
+        assessment={activeAssessment}
+        onFinish={handleFinishAssessment}
+      />
+    ) : (
       <CandidatePortal
         user={currentUser}
         onSelectAssessment={setActiveAssessment}
         onLogout={handleLogout}
-        onUpdateProfile={(updatedUser) => {
-          setCurrentUserState(updatedUser);
-        }}
+        onUpdateProfile={setCurrentUser}
       />
     );
   }
 
-  // Admin / Examiner Role
   return (
     <AdminDashboard
       user={currentUser}
       onLogout={handleLogout}
     />
   );
+}
