@@ -7,12 +7,14 @@ import AuthGate from './components/AuthGate';
 import CandidatePortal from './components/CandidatePortal';
 import AssessmentRunner from './components/AssessmentRunner';
 import AdminDashboard from './components/AdminDashboard';
+import LandingPage from './components/landing/LandingPage';
 import { Loader } from 'lucide-react';
 
 export default function App() {
   const [currentUser, setCurrentUserState] = useState<UserProfile | null>(null);
   const [activeAssessment, setActiveAssessment] = useState<Assessment | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showLanding, setShowLanding] = useState(true);
 
   // Synchronize with active Firebase Auth session state or local session
   useEffect(() => {
@@ -120,6 +122,9 @@ export default function App() {
   }
 
   if (!currentUser) {
+    if (showLanding) {
+      return <LandingPage onLogin={() => setShowLanding(false)} />;
+    }
     return <AuthGate onAuthSuccess={handleAuthSuccess} />;
   }
 
