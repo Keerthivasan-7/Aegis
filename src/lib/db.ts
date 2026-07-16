@@ -53,12 +53,16 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 }
 
 // Dual-Mode Database State Tracker
-let isFirestoreAvailable = true;
+const isFirebaseConfigured = 
+  !!(import.meta as any).env.VITE_FIREBASE_API_KEY && 
+  (import.meta as any).env.VITE_FIREBASE_API_KEY !== "fallback_placeholder_key";
+
+let isFirestoreAvailable = isFirebaseConfigured;
 
 // Fallback Local Storage Keys and helper utilities
-const LOCAL_STORAGE_PREFIX = 'aegis_local_';
+export const LOCAL_STORAGE_PREFIX = 'aegis_local_';
 
-function getLocalItem<T>(key: string, defaultValue: T): T {
+export function getLocalItem<T>(key: string, defaultValue: T): T {
   try {
     const item = localStorage.getItem(LOCAL_STORAGE_PREFIX + key);
     return item ? JSON.parse(item) : defaultValue;
@@ -67,7 +71,7 @@ function getLocalItem<T>(key: string, defaultValue: T): T {
   }
 }
 
-function setLocalItem<T>(key: string, value: T): void {
+export function setLocalItem<T>(key: string, value: T): void {
   try {
     localStorage.setItem(LOCAL_STORAGE_PREFIX + key, JSON.stringify(value));
   } catch (e) {
@@ -76,7 +80,7 @@ function setLocalItem<T>(key: string, value: T): void {
 }
 
 // Fallback static datasets
-const defaultUsers: UserProfile[] = [
+export const defaultUsers: UserProfile[] = [
   { userId: 'student-alex', name: 'Alex Mercer', email: 'alex@student.com', role: 'student', createdAt: new Date().toISOString() },
   { userId: 'student-bella', name: 'Bella Thorne', email: 'bella@student.com', role: 'student', createdAt: new Date().toISOString() },
   { userId: 'student-chris', name: 'Chris Evans', email: 'chris@student.com', role: 'student', createdAt: new Date().toISOString() },
@@ -140,6 +144,11 @@ export function isUsingLocalSandbox(): boolean {
 
 // 1. Connection Validation as mandatory in skill
 export async function validateFirebaseConnection() {
+  if (!isFirebaseConfigured) {
+    isFirestoreAvailable = false;
+    console.log('Aegis is configured to start directly in offline local sandbox mode (no Firebase config detected).');
+    return;
+  }
   try {
     await getDocFromServer(doc(db, '_connection_test_collection_', 'ping'));
     isFirestoreAvailable = true;

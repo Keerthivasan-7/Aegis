@@ -46,13 +46,13 @@ export default function ProctoringHud({ onViolationLogged, isActive, onMultipleF
     let active = true;
     const loadModels = async () => {
       try {
-        // Await TensorFlow.js readiness so it registers the optimal accelerated backend (WebGL)
+        // Let TensorFlow.js automatically select the best accelerated backend (usually WebGL) for fast and precise face coordinate resolution
         if ((faceapi as any).tf) {
           try {
             await (faceapi as any).tf.ready();
-            console.log('TensorFlow.js engine initialized successfully with optimal hardware backend.');
-          } catch (readyErr) {
-            console.warn('TensorFlow.js readiness check bypassed:', readyErr);
+            console.log('TensorFlow.js backend successfully initialized:', (faceapi as any).tf.getBackend());
+          } catch (backendErr) {
+            console.warn('Could not initialize TensorFlow.js backend, falling back:', backendErr);
           }
         }
         await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
@@ -173,7 +173,17 @@ export default function ProctoringHud({ onViolationLogged, isActive, onMultipleF
 
       try {
         const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.5 });
-        const detections = await faceapi.detectAllFaces(video, options).withFaceLandmarks();
+        const rawDetections = await faceapi.detectAllFaces(video, options).withFaceLandmarks();
+        
+        // Filter out any anomalous detections with invalid/null/NaN coordinates to avoid Box.constructor issues
+        const detections = rawDetections.filter(det => {
+          const box = det?.detection?.box;
+          return box && 
+                 box.left !== null && box.left !== undefined && !isNaN(box.left) &&
+                 box.top !== null && box.top !== undefined && !isNaN(box.top) &&
+                 box.width !== null && box.width !== undefined && !isNaN(box.width) &&
+                 box.height !== null && box.height !== undefined && !isNaN(box.height);
+        });
 
         const timestamp = new Date().toISOString();
 

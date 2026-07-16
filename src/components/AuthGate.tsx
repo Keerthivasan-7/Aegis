@@ -7,7 +7,7 @@ import {
   sendPasswordResetEmail
 } from 'firebase/auth';
 import { auth } from '../lib/firebase';
-import { getUserProfile, registerUserDoc, isUsingLocalSandbox } from '../lib/db';
+import { getUserProfile, registerUserDoc, isUsingLocalSandbox, getLocalItem, defaultUsers } from '../lib/db';
 import { 
   ShieldCheck, 
   User, 
@@ -110,6 +110,51 @@ export default function AuthGate({ onAuthSuccess }: AuthGateProps) {
     }
 
     try {
+      if (isUsingLocalSandbox()) {
+        if (isLogin) {
+          // Local sandbox sign in
+          const users = getLocalItem<UserProfile[]>('users', defaultUsers);
+          const foundUser = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
+          
+          if (foundUser) {
+            // Success! Authenticate locally
+            localStorage.setItem('aegis_local_session', JSON.stringify(foundUser));
+            onAuthSuccess(foundUser);
+          } else {
+            setError('No local sandbox account found with this academic email. Please use a default credential or create an account.');
+          }
+        } else {
+          // Local sandbox sign up
+          if (!name || name.trim().length < 2) {
+            setError('Please enter a display name (minimum 2 characters).');
+            setLoading(false);
+            return;
+          }
+
+          const users = getLocalItem<UserProfile[]>('users', defaultUsers);
+          const exists = users.some(u => u.email.toLowerCase() === email.trim().toLowerCase());
+          if (exists) {
+            setError('This academic email is already registered in the sandbox.');
+            setLoading(false);
+            return;
+          }
+
+          const newUser: UserProfile = {
+            userId: 'local-' + Math.random().toString(36).substr(2, 9),
+            name: name.trim(),
+            email: email.trim().toLowerCase(),
+            role,
+            createdAt: new Date().toISOString()
+          };
+
+          await registerUserDoc(newUser);
+          localStorage.setItem('aegis_local_session', JSON.stringify(newUser));
+          onAuthSuccess(newUser);
+        }
+        setLoading(false);
+        return;
+      }
+
       if (isLogin) {
         // Sign in with Firebase Auth
         const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
@@ -273,6 +318,26 @@ export default function AuthGate({ onAuthSuccess }: AuthGateProps) {
                   <div>
                     Secure password reset link has been dispatched to <span className="font-mono text-zinc-200">{email}</span>. Please inspect your inbox and spam folders.
                   </div>
+                </div>
+              )}
+
+              {/* Show local sandbox help panel if Firebase is not active */}
+              {isUsingLocalSandbox() && isLogin && (
+                <div className="p-4 bg-indigo-500/5 border border-indigo-500/10 rounded-xl text-xs text-indigo-300 leading-relaxed space-y-2">
+                  <div className="font-semibold flex items-center gap-1.5">
+                    <Info className="w-4 h-4 text-indigo-400" />
+                    Local Sandbox Mode Active
+                  </div>
+                  <p className="text-zinc-400">
+                    Firebase credentials are unconfigured. You can log in instantly using these local sandbox credentials (any password):
+                  </p>
+                  <div className="font-mono text-[11px] space-y-1 text-zinc-300 bg-zinc-950/40 p-2.5 rounded-lg border border-zinc-850">
+                    <div>• <span className="text-indigo-400">alex@student.com</span> (Candidate Portal)</div>
+                    <div>• <span className="text-indigo-400">keerthivasangkv77@gmail.com</span> (Examiner Dashboard)</div>
+                  </div>
+                  <p className="text-[10px] text-zinc-500">
+                    Alternatively, register a new custom Candidate or Examiner account below.
+                  </p>
                 </div>
               )}
 

@@ -829,11 +829,23 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
         
         {/* Left Side: Dynamic Proctor HUD & Active Violation Feed */}
         <div className="lg:col-span-1 p-6 border-r border-zinc-800 bg-zinc-950/20 space-y-6 overflow-y-auto max-h-[calc(100vh-4rem)]">
-          <ProctoringHud 
-            onViolationLogged={handleViolationLogged} 
-            isActive={started && !isSubmitting && !isTerminated} 
-            onMultipleFacesStrike={handleMultipleFacesStrike}
-          />
+          {(import.meta as any).env.VITE_DISABLE_REALTIME_PROCTORING === 'true' ? (
+            <div className="p-4 border border-indigo-500/10 bg-indigo-500/5 rounded-xl text-center space-y-1.5 shadow-sm">
+              <div className="flex items-center justify-center gap-1.5 text-[10px] uppercase font-mono text-indigo-400 font-bold tracking-wider">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
+                Proctor Bypass Active
+              </div>
+              <p className="text-zinc-400 text-[10px] leading-relaxed">
+                Real-time webcam feed and eye metrics tracking have been disabled via environment configuration.
+              </p>
+            </div>
+          ) : (
+            <ProctoringHud 
+              onViolationLogged={handleViolationLogged} 
+              isActive={started && !isSubmitting && !isTerminated} 
+              onMultipleFacesStrike={handleMultipleFacesStrike}
+            />
+          )}
 
           {/* Active Proctoring Incident Log */}
           <div className="space-y-3">

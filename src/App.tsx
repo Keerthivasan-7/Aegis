@@ -14,37 +14,81 @@ export default function App() {
   const [activeAssessment, setActiveAssessment] = useState<Assessment | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Synchronize with active Firebase Auth session state
+  // Synchronize with active Firebase Auth session state or local session
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    let active = true;
+
+    const initAuth = async () => {
       try {
         setLoading(true);
-        if (firebaseUser) {
-          const profile = await getUserProfile(firebaseUser.uid);
-          if (profile) {
-            setCurrentUserState(profile);
-          } else {
-            // Fallback user state in case profile sync is delayed
-            setCurrentUserState({
-              userId: firebaseUser.uid,
-              name: firebaseUser.displayName || 'Candidate',
-              email: firebaseUser.email || '',
-              role: 'student',
-              createdAt: new Date().toISOString()
-            });
+        const { validateFirebaseConnection, isUsingLocalSandbox } = await import('./lib/db');
+        await validateFirebaseConnection();
+
+        if (isUsingLocalSandbox()) {
+          // Check local sandbox session
+          const localSession = localStorage.getItem('aegis_local_session');
+          if (localSession && active) {
+            try {
+              setCurrentUserState(JSON.parse(localSession));
+            } catch (e) {
+              console.warn("Failed to parse local session:", e);
+            }
+          }
+          if (active) {
+            setLoading(false);
           }
         } else {
-          setCurrentUserState(null);
-          setActiveAssessment(null);
+          // Subscribe to Firebase Auth
+          const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+            try {
+              if (firebaseUser) {
+                const profile = await getUserProfile(firebaseUser.uid);
+                if (active) {
+                  if (profile) {
+                    setCurrentUserState(profile);
+                  } else {
+                    // Fallback user state in case profile sync is delayed
+                    setCurrentUserState({
+                      userId: firebaseUser.uid,
+                      name: firebaseUser.displayName || 'Candidate',
+                      email: firebaseUser.email || '',
+                      role: 'student',
+                      createdAt: new Date().toISOString()
+                    });
+                  }
+                }
+              } else if (active) {
+                setCurrentUserState(null);
+                setActiveAssessment(null);
+              }
+            } catch (err) {
+              console.error("Auth state change error:", err);
+            } finally {
+              if (active) {
+                setLoading(false);
+              }
+            }
+          });
+
+          return unsubscribe;
         }
       } catch (err) {
-        console.error("Auth state change error:", err);
-      } finally {
-        setLoading(false);
+        console.error("Failed to initialize auth layer:", err);
+        if (active) {
+          setLoading(false);
+        }
       }
+    };
+
+    let fbUnsubscribe: (() => void) | undefined;
+    initAuth().then((unsub) => {
+      if (unsub) fbUnsubscribe = unsub;
     });
 
-    return () => unsubscribe();
+    return () => {
+      active = false;
+      if (fbUnsubscribe) fbUnsubscribe();
+    };
   }, []);
 
   const handleAuthSuccess = (user: UserProfile) => {
@@ -54,6 +98,7 @@ export default function App() {
   const handleLogout = async () => {
     try {
       await auth.signOut();
+      localStorage.removeItem('aegis_local_session');
       setCurrentUserState(null);
       setActiveAssessment(null);
     } catch (e) {
