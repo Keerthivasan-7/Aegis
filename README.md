@@ -1,98 +1,197 @@
-# Aegis — AI-Powered Secure Assessment Platform
+# 🛡️ Aegis
 
-Aegis is a high-integrity, production-ready secure online assessment platform designed to eliminate academic dishonesty and ensure fair testing conditions. Leveraging advanced web technologies, full-stack architecture, real-time client-side computer vision proctoring, and server-side generative artificial intelligence risk review, Aegis provides an automated, objective trust score and a detailed analytical report for every technical evaluation.
+> **AI-Powered Intelligent Proctoring & Real-Time Assessment Platform**
 
----
-
-## 🚀 Core Platform Features
-
-- **Real-Time Webcam Proctoring HUD**: Features zero-latency, client-side face and eye tracking powered by **face-api.js** to detect student absence, gaze departure, or secondary persons inside the camera frame.
-- **Strict Workspace Restrictions**: Proactively enforces browser focus locks (detects tab-switching), full-screen enforcement, and restrictive copy-paste blocks.
-- **Deep AI Risk Assessment**: Offloads full-stack analysis to the backend using the **Gemini 3.5 Flash API** to generate granular security review summaries, academic integrity logs, and code evaluation recommendations.
-- **Interactive Sandbox & Evaluation**: Provides fully operational assessment Runners, multiple-choice structures, real-time feedback gauges, and custom code editors.
-- **Examiner Ledger & Dashboards**: Hosts a responsive, sophisticated dark dashboard with real-time audit logs, distribution charts, risk metrics, and deep candidate profiles.
+Aegis is a next-generation online examination platform that combines **AI-powered proctoring**, **real-time monitoring**, and **intelligent assessment** to ensure secure, fair, and trustworthy technical evaluations. The platform leverages modern web technologies, Firebase, and Google's Gemini AI to detect suspicious behavior, monitor candidate activity, and generate automated proctoring reports.
 
 ---
 
-## 🧠 Artificial Intelligence Capabilities
+## ✨ Features
 
-Aegis utilizes **Gemini 3.5 Flash** as its primary cloud-side risk analysis and evaluator service. 
+### 👤 Authentication
+- Secure Firebase Authentication
+- Candidate & Examiner roles
+- Protected dashboard access
+- Role-based authorization
 
-- **Risk Score Generation**: Computes a detailed rating from `0` to `100` representing absolute trust vs. high-likelihood compromises.
-- **Behavioral Correlation**: Correlates client-side physical anomalies (e.g., eye gaze deviation, missing face) with interface events (tab switches, sudden optimal code generation) to identify potential external assistance.
-- **Code Evaluation**: Inspects code complexity, structure, and execution timelines to detect copied templates or uncharacteristic candidate writing style.
-- **Strict Dependency & Robust Fail-safe**: Unlike typical mock setups, Aegis enforces a hard dependency on the Gemini API. If the API returns key unconfiguration or rate-limits, the system flags `AI unavailable` in the interface and relies exclusively on raw, untainted local event ledgers to ensure absolute integrity without fake scores.
+### 📝 Exam Management
+- Create and manage examinations
+- Configure exam duration and rules
+- Question management
+- Real-time candidate sessions
+
+### 🤖 AI Proctoring
+- Webcam monitoring
+- Face presence detection
+- Multiple person detection
+- Head pose & gaze estimation
+- Tab switching detection
+- Window focus monitoring
+- Copy & paste restriction
+- Fullscreen enforcement
+- AI-generated violation summaries
+- Automated risk scoring
+
+### 📊 Examiner Dashboard
+- Live candidate monitoring
+- Proctoring alerts
+- Session timeline
+- AI-generated audit reports
+- Candidate performance overview
+
+### 📈 Analytics
+- Risk score visualization
+- Violation history
+- Exam statistics
+- Session summaries
 
 ---
 
-## 🛠️ Environment Configurations (BYOK Support)
+# 🛠️ Tech Stack
 
-Aegis implements a **Bring Your Own Key (BYOK)** model. The Google Gemini API key remains securely handled on the Node/Express backend and is never exposed to the client-side browser context.
+| Category | Technology |
+|----------|------------|
+| Frontend | React + TypeScript |
+| Build Tool | Vite |
+| Styling | Tailwind CSS |
+| Backend | Firebase |
+| Authentication | Firebase Authentication |
+| Database | Cloud Firestore |
+| AI | Google Gemini |
+| Hosting | Netlify |
+| Version Control | Git & GitHub |
 
-Create a `.env` file in the project root:
+---
 
-```env
-# Google Gemini API Key (Required for AI Risk reviews)
-GEMINI_API_KEY="your_google_gemini_api_key_here"
+# 📸 Core Proctoring Features
 
-# App Hosting URL configuration
-APP_URL="http://localhost:3000"
+- 👁️ Real-time webcam monitoring
+- 🧠 AI-powered behavioral analysis
+- 👤 Face detection
+- 👥 Multiple person detection
+- 📵 Browser focus monitoring
+- 🚫 Copy/Paste prevention
+- 🔒 Fullscreen enforcement
+- ⚠️ Automatic violation logging
+- 📑 AI-generated audit summary
+
+---
+
+# 📂 Project Structure
+
+```
+src/
+├── components/
+├── pages/
+├── hooks/
+├── services/
+├── firebase/
+├── contexts/
+├── utils/
+├── types/
+└── assets/
 ```
 
 ---
 
-## ⚙️ Installation & Running Locally
+# 🚀 Getting Started
 
-Ensure you have **Node.js 18+** installed on your workstation.
+## Clone the repository
 
-### 1. Install Project Dependencies
-Run the package installation command to download all required modules:
+```bash
+git clone https://github.com/yourusername/aegis.git
+cd aegis
+```
+
+## Install dependencies
+
 ```bash
 npm install
 ```
 
-### 2. Prepare Face Detection Models
-Ensure face-api.js models (`tiny_face_detector` and `face_landmark_68`) are located within your public assets folder:
-```
-/public/models/
-  ├── tiny_face_detector_model-weights_manifest.json
-  ├── tiny_face_detector_model-shard1
-  ├── face_landmark_68_model-weights_manifest.json
-  └── face_landmark_68_model-shard1
+## Configure Environment Variables
+
+Create a `.env` file.
+
+```env
+VITE_FIREBASE_API_KEY=
+VITE_FIREBASE_AUTH_DOMAIN=
+VITE_FIREBASE_PROJECT_ID=
+VITE_FIREBASE_STORAGE_BUCKET=
+VITE_FIREBASE_MESSAGING_SENDER_ID=
+VITE_FIREBASE_APP_ID=
+
+VITE_GEMINI_API_KEY=
 ```
 
-### 3. Run Development Server
-Boot both the Express API and Vite live frontend server in parallel:
+---
+
+## Run locally
+
 ```bash
 npm run dev
 ```
-Open [http://localhost:3000](http://localhost:3000) inside your web browser.
 
 ---
 
-## 🏗️ Production Build & Deployment
+## Build
 
-Aegis is optimized for containerized environments (Google Cloud Run) or hosting layers like Netlify.
-
-### 1. Compile and Bundle for Production
-Build the static assets and compile the Express backend server with:
 ```bash
 npm run build
 ```
-This script bundles files and generates:
-- Frontend assets inside `/dist/`
-- Compiled CommonJS backend inside `/dist/server.cjs`
-
-### 2. Start Production Server
-Launch the production bundle via:
-```bash
-npm run start
-```
 
 ---
 
-## 🏆 Hackathon Judging Compliance
+# 🔥 Firebase Services
 
-- **No Placeholders**: Every visual component, code workspace, and proctor action is fully live, driven by real detections, and backed by authentic API evaluation.
-- **Aesthetic Precision**: Implements a custom **Sophisticated Dark** SaaS design with smooth micro-interactions, responsive grids, and clean visual structures.
-- **Academic Reliability**: Emphasizes strict, uncompromised audit trail security and compliant grading standards.
+- Firebase Authentication
+- Cloud Firestore
+
+---
+
+# 📖 How It Works
+
+1. Candidate signs in.
+2. Examiner creates an exam.
+3. Candidate joins the exam.
+4. Webcam and browser activity are monitored in real time.
+5. AI continuously analyzes candidate behavior.
+6. Suspicious activities are recorded.
+7. Gemini generates an intelligent proctoring report.
+8. Examiner reviews AI-generated insights after the exam.
+
+---
+
+# 🎯 Future Improvements
+
+- Voice activity detection
+- Mobile phone detection
+- Screen recording
+- Eye tracking improvements
+- Live examiner notifications
+- AI-generated feedback
+- Plagiarism detection
+- Multi-language support
+- LMS integration
+- Advanced analytics dashboard
+
+---
+
+# 🤝 Contributing
+
+Contributions are welcome!
+
+1. Fork the repository
+2. Create a new feature branch
+3. Commit your changes
+4. Open a Pull Request
+
+---
+
+# 📄 License
+
+This project is licensed under the **MIT License**.
+
+---
+
+## ⭐ If you found this project useful, consider giving it a star!
