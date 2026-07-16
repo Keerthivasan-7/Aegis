@@ -350,20 +350,4 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
   }
 }
 
-// Seed function to recreate demo mock data in Firestore via the secure server-side administrative seeding endpoint.
-export async function seedFirestoreDemoData(): Promise<void> {
-  try {
-    const res = await fetch('/api/seed-database', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    });
-    const data = await res.json();
-    if (data.success) {
-      console.log('Database seeded via Secure Server Seeding API:', data.message || 'Success');
-    } else {
-      console.warn('Server seed API returned warning/error:', data.error || data.warning);
-    }
-  } catch (err) {
-    console.error('Failed to seed demo data via secure server endpoint:', err);
-  }
-}
+

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Assessment, CodingQuestion, ProctoringLog, Question, Submission, UserProfile } from '../types';
 import ProctoringHud from './ProctoringHud';
+import ViolationWarningModal from './ViolationWarningModal';
 import { Clock, ShieldAlert, FileText, CheckCircle, Play, Loader, Code, FileCheck, ArrowRight, CornerDownLeft, AlertTriangle } from 'lucide-react';
 
 interface AssessmentRunnerProps {
@@ -20,6 +21,12 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
   const [runOutputs, setRunOutputs] = useState<Record<string, { status: 'idle' | 'success' | 'error', message: string }>>({});
   const [initializing, setInitializing] = useState(false);
   const [error, setError] = useState('');
+  
+  // Multiple-face warning and termination states
+  const [strikeCount, setStrikeCount] = useState<number>(0);
+  const [warningModalOpen, setWarningModalOpen] = useState<boolean>(false);
+  const [isTerminated, setIsTerminated] = useState<boolean>(false);
+  const [isTerminating, setIsTerminating] = useState<boolean>(false);
 
   // 1. Establish server-authoritative exam session
   const requestFullScreenAndStart = async () => {
@@ -68,9 +75,64 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
     setProctoringLogs(prev => [...prev, log]);
   };
 
+  // Callback called when a multiple-faces strike event fires
+  const handleMultipleFacesStrike = async (count: number) => {
+    setStrikeCount(count);
+    if (count < 3) {
+      setWarningModalOpen(true);
+    } else if (count >= 3 && !isTerminated) {
+      // Strike 3 - Disqualify and terminate immediately without candidate interaction
+      setIsTerminated(true);
+      setWarningModalOpen(false);
+      await triggerTermination();
+    }
+  };
+
+  const triggerTermination = async () => {
+    setIsTerminating(true);
+
+    // Force unlock fullscreen
+    if (document.fullscreenElement && document.exitFullscreen) {
+      try {
+        await document.exitFullscreen();
+      } catch (err) {}
+    }
+
+    try {
+      // Call the secure terminate endpoint
+      const res = await fetch('/api/terminate-exam', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          submissionId,
+          proctoringLogs: [
+            ...proctoringLogs,
+            {
+              timestamp: new Date().toISOString(),
+              type: 'multiple-faces',
+              details: 'ASSESSMENT AUTOMATICALLY TERMINATED — 3/3 Multiple Faces Strikes Exceeded.'
+            }
+          ],
+          reason: 'multiple-faces-exceeded'
+        })
+      });
+
+      if (!res.ok) {
+        throw new Error('Termination registration rejected by secure gateway.');
+      }
+    } catch (err: any) {
+      console.error('Termination network error:', err);
+      setError('Aegis Secure Gateway could not sync termination event: ' + err.message);
+    } finally {
+      setIsTerminating(false);
+    }
+  };
+
   // Countdown timer (synced locally but verified server-side during submit)
   useEffect(() => {
-    if (!started || isSubmitting) return;
+    if (!started || isSubmitting || isTerminated) return;
 
     if (timeLeft <= 0) {
       triggerSubmit();
@@ -82,7 +144,7 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [started, timeLeft, isSubmitting]);
+  }, [started, timeLeft, isSubmitting, isTerminated]);
 
   const handleMCSelect = (questionId: string, optionIdx: number) => {
     setAnswers(prev => ({ ...prev, [questionId]: String(optionIdx) }));
@@ -290,11 +352,85 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
     );
   }
 
+  if (isTerminated) {
+    return (
+      <div className="min-h-screen bg-[#09090b] text-rose-500 flex items-center justify-center p-6 font-mono">
+        <div className="w-full max-w-3xl bg-[#121214] border border-rose-950/60 rounded-2xl p-8 md:p-10 space-y-8 shadow-2xl relative" id="termination-terminal">
+          <div className="absolute top-[-10%] right-[-10%] w-[200px] h-[200px] rounded-full bg-rose-500/5 blur-[80px] pointer-events-none" />
+          
+          <div className="flex flex-col md:flex-row items-center gap-6 pb-6 border-b border-rose-950/40">
+            <div className="w-16 h-16 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-500 flex-shrink-0 animate-pulse">
+              <ShieldAlert className="w-8 h-8" />
+            </div>
+            <div className="space-y-1 text-center md:text-left">
+              <span className="text-[10px] uppercase tracking-[0.25em] font-bold text-rose-400">DISCIPLINARY PROTOCOL EXECUTED</span>
+              <h1 className="text-xl md:text-2xl font-bold font-display text-zinc-100 tracking-tight">REMOVED FROM ASSESSMENT</h1>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="p-4 bg-zinc-950 border border-rose-950/30 rounded-xl space-y-3 text-xs text-zinc-400 leading-relaxed font-sans">
+              <p>
+                This assessment session has been <span className="text-rose-400 font-semibold underline">automatically locked and terminated</span> because the Aegis proctoring system flagged consecutive violations of the dual-presence honor constraint.
+              </p>
+              <p className="font-mono text-[11px] text-zinc-500">
+                SYSTEM_DECISION: AUTO_DISQUALIFICATION_STRIKE_OUT
+                <br />
+                REASON: MULTIPLE_FACES_LIMIT_EXCEEDED (3/3 strikes)
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <h3 className="text-[10px] uppercase tracking-wider text-rose-400 font-bold flex items-center gap-2">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                INTEGRITY VIOLATION TIMELINE
+              </h3>
+              <div className="border border-rose-950/30 bg-zinc-950 rounded-xl p-4 max-h-[180px] overflow-y-auto space-y-2 text-[11px]">
+                {proctoringLogs.filter(log => log.type === 'multiple-faces').map((log, idx) => (
+                  <div key={idx} className="p-2.5 bg-rose-950/10 border border-rose-500/10 rounded-lg space-y-0.5" id={`strike-log-${idx}`}>
+                    <div className="flex justify-between text-rose-400 font-bold">
+                      <span>STRIKE {idx + 1} - MULTIPLE FACES</span>
+                      <span>{new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                    </div>
+                    <p className="text-zinc-500 text-[10.5px] leading-relaxed">{log.details}</p>
+                  </div>
+                ))}
+                <div className="p-2.5 bg-rose-950/20 border border-rose-500/25 rounded-lg text-rose-300 font-bold">
+                  <div>FINAL EXAM TERMINATION HANDSHAKE</div>
+                  <p className="text-zinc-400 text-[10.5px] font-normal leading-relaxed mt-1">
+                    Candidate session closed securely and status set to <span className="font-mono text-rose-400 font-semibold text-[11px]">disqualified</span> on the examination evaluation database ledger.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-4 flex justify-end">
+            <button
+              onClick={onFinish}
+              id="close-terminal-btn"
+              className="py-2.5 px-6 bg-rose-950/40 hover:bg-rose-950/60 text-rose-400 hover:text-rose-300 border border-rose-500/20 rounded-xl text-xs font-semibold font-mono tracking-wider transition-all cursor-pointer flex items-center gap-2"
+            >
+              CLOSE SECURE GATEWAY
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const currentQuestion: Question = assessment.questions[currentQuestionIndex];
   const codeLang = (currentQuestion as CodingQuestion).language || 'javascript';
 
   return (
     <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col justify-between selection:bg-zinc-800">
+      {warningModalOpen && (
+        <ViolationWarningModal 
+          strikeCount={strikeCount} 
+          onDismiss={() => setWarningModalOpen(false)} 
+        />
+      )}
       
       {/* Top Bar Navigation */}
       <header className="border-b border-zinc-800 bg-zinc-950/70 h-16 px-6 flex items-center justify-between sticky top-0 z-40 backdrop-blur-md">
@@ -355,7 +491,8 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
         <div className="lg:col-span-1 p-6 border-r border-zinc-800 bg-zinc-950/20 space-y-6 overflow-y-auto max-h-[calc(100vh-4rem)]">
           <ProctoringHud 
             onViolationLogged={handleViolationLogged} 
-            isActive={started && !isSubmitting} 
+            isActive={started && !isSubmitting && !isTerminated} 
+            onMultipleFacesStrike={handleMultipleFacesStrike}
           />
 
           {/* Active Proctoring Incident Log */}

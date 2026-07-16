@@ -6,9 +6,10 @@ import * as faceapi from '@vladmandic/face-api';
 interface ProctoringHudProps {
   onViolationLogged: (log: ProctoringLog) => void;
   isActive: boolean;
+  onMultipleFacesStrike: (strikeCount: number) => void;
 }
 
-export default function ProctoringHud({ onViolationLogged, isActive }: ProctoringHudProps) {
+export default function ProctoringHud({ onViolationLogged, isActive, onMultipleFacesStrike }: ProctoringHudProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [streamActive, setStreamActive] = useState(false);
@@ -34,6 +35,11 @@ export default function ProctoringHud({ onViolationLogged, isActive }: Proctorin
   const lastLookAwayLogRef = useRef<number>(0);
   const lastFaceMissingLogRef = useRef<number>(0);
   const lastMultipleFacesLogRef = useRef<number>(0);
+  
+  // Decided to never reset the warning strikes during the session for exam integrity, 
+  // so a candidate cannot exploit the system by briefly hiding the secondary person 
+  // to reset their warnings and continuously violating the proctoring rules.
+  const multipleFacesStrikeRef = useRef<number>(0);
 
   // Load face-api models
   useEffect(() => {
@@ -229,11 +235,13 @@ export default function ProctoringHud({ onViolationLogged, isActive }: Proctorin
           setEyeGazeStatus('Departed');
 
           if (Date.now() - lastMultipleFacesLogRef.current > 5000) {
+            multipleFacesStrikeRef.current += 1;
             onViolationLogged({
               timestamp,
               type: 'multiple-faces',
-              details: 'Multiple faces detected in the camera frame.'
+              details: `Multiple faces detected in the camera frame. Strike ${multipleFacesStrikeRef.current}/3.`
             });
+            onMultipleFacesStrike(multipleFacesStrikeRef.current);
             lastMultipleFacesLogRef.current = Date.now();
           }
         }

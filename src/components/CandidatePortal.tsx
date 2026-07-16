@@ -165,6 +165,11 @@ export default function CandidatePortal({ user, onSelectAssessment, onLogout }: 
                                 <div className="text-[10px] text-zinc-500">Graded Result</div>
                                 <div className="text-zinc-100 font-semibold">{submission.score} / {submission.totalPoints} pts</div>
                               </div>
+                            ) : submission.status === 'terminated' ? (
+                              <div className="space-y-1">
+                                <div className="text-[10px] text-rose-500 uppercase tracking-wider font-semibold">Disqualified</div>
+                                <div className="text-rose-400 font-semibold text-[10px]">REMOVED (3 strikes)</div>
+                              </div>
                             ) : (
                               'Pending Review'
                             )}

@@ -407,6 +407,46 @@ app.post('/api/start-exam', async (req, res) => {
     let assessmentTitle = 'Algorithms & Data Structures Challenge';
     let useFallback = !firestoreDb;
 
+    // Prevent re-entry: check if student has an existing completed, graded, or terminated submission for this assessment
+    let existingSubmission: any = null;
+    if (firestoreDb && !useFallback) {
+      try {
+        const subSnap = await firestoreDb.collection('submissions')
+          .where('studentId', '==', studentId)
+          .where('assessmentId', '==', assessmentId)
+          .get();
+        if (!subSnap.empty) {
+          // Find if there's any that is NOT ongoing
+          for (const doc of subSnap.docs) {
+            const data = doc.data();
+            if (data.status !== 'ongoing') {
+              existingSubmission = data;
+              break;
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn('[Firestore Warning] Failed to query existing submissions:', err.message);
+      }
+    }
+    
+    // Check in-memory as well
+    if (!existingSubmission) {
+      for (const [subId, sub] of serverInMemorySubmissions.entries()) {
+        if (sub.studentId === studentId && sub.assessmentId === assessmentId && sub.status !== 'ongoing') {
+          existingSubmission = sub;
+          break;
+        }
+      }
+    }
+
+    if (existingSubmission) {
+      const reasonMsg = existingSubmission.status === 'terminated' 
+        ? 'Disciplinary removal record found. Access to this assessment has been permanently blocked.'
+        : 'You have already completed and submitted this assessment.';
+      return res.status(403).json({ error: reasonMsg });
+    }
+
     if (firestoreDb) {
       try {
         const assessDoc = await firestoreDb.collection('assessments').doc(assessmentId).get();
@@ -741,8 +781,94 @@ Return ONLY the raw JSON string. Do not wrap in markdown block fences like \`\`\
   }
 });
 
+// 4. Server-Authoritative Secured Exam Disciplinary Termination Route
+app.post('/api/terminate-exam', async (req, res) => {
+  try {
+    const { submissionId, proctoringLogs, reason } = req.body;
+
+    if (!submissionId) {
+      return res.status(400).json({ error: 'Missing submission payload' });
+    }
+
+    // Input length sanitization to avoid DB overload
+    if (proctoringLogs && proctoringLogs.length > 1000) {
+      return res.status(400).json({ error: 'Payload exceeds safe data limits' });
+    }
+
+    const submittedAt = new Date().toISOString();
+
+    let subData: any = null;
+    let useFallback = !firestoreDb;
+
+    if (firestoreDb) {
+      try {
+        const subDoc = await firestoreDb.collection('submissions').doc(submissionId).get();
+        if (subDoc.exists) {
+          subData = subDoc.data()!;
+        } else {
+          subData = serverInMemorySubmissions.get(submissionId);
+        }
+      } catch (err: any) {
+        console.warn(`[Firestore Warning] Failed to fetch submission ${submissionId} from Firestore (Using local fallback):`, err.message || err);
+        useFallback = true;
+        subData = serverInMemorySubmissions.get(submissionId);
+      }
+    } else {
+      subData = serverInMemorySubmissions.get(submissionId);
+    }
+
+    if (!subData) {
+      return res.status(404).json({ error: 'Assessment session not found' });
+    }
+
+    if (subData.status === 'graded' || subData.status === 'terminated') {
+      return res.json(subData);
+    }
+
+    // Set status: 'terminated', score: 0, save proctoringLogs and terminationReason, submittedAt: new timestamp.
+    // Do NOT call the Gemini grading step.
+    const finalizedPayload = {
+      ...subData,
+      status: 'terminated',
+      score: 0,
+      proctoringLogs: proctoringLogs || [],
+      terminationReason: reason || 'multiple-faces-exceeded',
+      submittedAt,
+    };
+
+    if (firestoreDb && !useFallback) {
+      try {
+        await firestoreDb.collection('submissions').doc(submissionId).set(finalizedPayload);
+      } catch (err: any) {
+        console.warn('[Firestore Warning] Failed to write finalized termination to Firestore, updating in-memory cache:', err.message || err);
+        serverInMemorySubmissions.set(submissionId, finalizedPayload);
+      }
+    } else {
+      serverInMemorySubmissions.set(submissionId, finalizedPayload);
+    }
+
+    console.log(`[Exam Terminated] Disqualified student session ${submissionId} successfully locked.`);
+    return res.json(finalizedPayload);
+
+  } catch (error: any) {
+    console.error('Server submission termination failure:', error);
+    res.status(500).json({ error: error.message || 'Failed to terminate assessment' });
+  }
+});
+
 // Serve frontend assets
 async function startServer() {
+  if (firestoreDb) {
+    try {
+      // Validate read permission on Firestore to catch unauthorized Project ID configuration early
+      await firestoreDb.collection('_connection_check_').limit(1).get();
+      console.log("Firebase Admin Firestore connection successfully verified with read access.");
+    } catch (err: any) {
+      console.log("[Firebase Info] Firestore read check bypassed or not permitted. Falling back to robust in-memory and local storage simulation.");
+      firestoreDb = null;
+    }
+  }
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

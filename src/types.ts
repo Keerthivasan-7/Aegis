@@ -57,12 +57,13 @@ export interface Submission {
   studentName: string;
   studentEmail: string;
   answers: Record<string, string>; // Maps questionId to candidate's answer/code
-  status: 'ongoing' | 'submitted' | 'graded';
+  status: 'ongoing' | 'submitted' | 'graded' | 'terminated';
   score: number;
   totalPoints: number;
   proctoringLogs: ProctoringLog[];
   aiRiskScore?: number; // 0 to 100
   aiProctoringSummary?: string;
+  terminationReason?: string;
   startedAt: string;
   submittedAt?: string;
 }

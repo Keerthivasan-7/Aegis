@@ -313,32 +313,47 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
                   ) : (
                     filteredSubmissions.map(sub => {
                       const risk = sub.aiRiskScore || 0;
+                      const isTerminated = sub.status === 'terminated';
                       let riskBadge = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
-                      if (risk >= 60) riskBadge = 'bg-rose-500/10 text-rose-400 border-rose-500/20';
+                      if (isTerminated) riskBadge = 'bg-rose-500/20 text-rose-400 border-rose-500/30 animate-pulse';
+                      else if (risk >= 60) riskBadge = 'bg-rose-500/10 text-rose-400 border-rose-500/20';
                       else if (risk >= 30) riskBadge = 'bg-amber-500/10 text-amber-400 border-amber-500/20';
 
                       return (
-                        <tr key={sub.submissionId} className="hover:bg-zinc-900/20 transition-colors">
+                        <tr key={sub.submissionId} className={`hover:bg-zinc-900/20 transition-colors ${isTerminated ? 'bg-rose-950/5' : ''}`}>
                           <td className="py-3.5 px-5">
-                            <div className="font-semibold text-zinc-200">{sub.studentName}</div>
+                            <div className="font-semibold text-zinc-200 flex items-center gap-2">
+                              {sub.studentName}
+                              {isTerminated && (
+                                <span className="text-[9px] bg-rose-500/10 border border-rose-500/25 text-rose-400 font-mono font-medium px-1.5 py-0.5 rounded-full uppercase">Terminated</span>
+                              )}
+                            </div>
                             <div className="text-[10px] text-zinc-500 font-mono mt-0.5">{sub.studentEmail}</div>
                           </td>
                           <td className="py-3.5 px-5 text-zinc-300">
                             {sub.assessmentTitle}
                           </td>
                           <td className="py-3.5 px-5 font-mono text-[11px] text-zinc-400">
-                            {sub.proctoringLogs.length > 0 ? (
+                            {isTerminated ? (
+                              <span className="text-rose-400 font-semibold font-mono text-[10px] uppercase">3 strikes lockout</span>
+                            ) : sub.proctoringLogs.length > 0 ? (
                               <span className="text-amber-500 font-semibold">{sub.proctoringLogs.length} flagged</span>
                             ) : (
                               <span className="text-zinc-500">0 events</span>
                             )}
                           </td>
                           <td className="py-3.5 px-5 font-mono text-[11px] text-zinc-300">
-                            <span className="font-bold">{sub.score}</span> / {sub.totalPoints} pts
+                            {isTerminated ? (
+                              <span className="text-rose-500 font-bold uppercase tracking-wider text-[10px]">REMOVED (3 strikes)</span>
+                            ) : (
+                              <>
+                                <span className="font-bold">{sub.score}</span> / {sub.totalPoints} pts
+                              </>
+                            )}
                           </td>
                           <td className="py-3.5 px-5">
                             <span className={`inline-block font-mono text-[11px] font-bold px-2 py-0.5 rounded border ${riskBadge}`}>
-                              {risk}%
+                              {isTerminated ? 'DISQUALIFIED' : `${risk}%`}
                             </span>
                           </td>
                           <td className="py-3.5 px-5 text-right">
@@ -608,7 +623,11 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
                   </div>
                   <div>
                     <span className="text-zinc-500 font-mono block">CORRECTNESS</span>
-                    <strong className="text-zinc-200 block mt-0.5 font-mono">{selectedSubmission.score} / {selectedSubmission.totalPoints} pts</strong>
+                    {selectedSubmission.status === 'terminated' ? (
+                      <strong className="text-rose-400 block mt-0.5 font-mono font-semibold uppercase">Disqualified (0 pts)</strong>
+                    ) : (
+                      <strong className="text-zinc-200 block mt-0.5 font-mono">{selectedSubmission.score} / {selectedSubmission.totalPoints} pts</strong>
+                    )}
                   </div>
                   <div>
                     <span className="text-zinc-500 font-mono block">COMPLETED AT</span>
@@ -662,7 +681,31 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
                 <div className="p-5 bg-zinc-900/60 border border-zinc-800 rounded-xl text-center space-y-2.5">
                   <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 font-semibold block">INTEGRITY RISK PROFILE</span>
                   
-                  {selectedSubmission.aiProctoringSummary === 'AI unavailable' ? (
+                  {selectedSubmission.status === 'terminated' ? (
+                    <div className="space-y-3">
+                      <div className="relative inline-flex items-center justify-center">
+                        <svg className="w-24 h-24 transform -rotate-90" viewBox="0 0 36 36">
+                          <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#27272a" strokeWidth="3" />
+                          <circle
+                            cx="18"
+                            cy="18"
+                            r="15.915"
+                            fill="transparent"
+                            stroke="#ef4444"
+                            strokeWidth="3.5"
+                            strokeDasharray="100 0"
+                            strokeDashoffset="25"
+                          />
+                        </svg>
+                        <span className="absolute text-sm font-bold font-mono text-rose-500 animate-pulse">LOCKOUT</span>
+                      </div>
+                      <div>
+                        <span className="inline-block text-[11px] font-bold px-3 py-1 rounded-full border bg-rose-950/20 border-rose-500/25 text-rose-400 animate-pulse">
+                          AUTOMATIC DISQUALIFICATION
+                        </span>
+                      </div>
+                    </div>
+                  ) : selectedSubmission.aiProctoringSummary === 'AI unavailable' ? (
                     <div className="space-y-3">
                       <div className="relative inline-flex items-center justify-center">
                         <svg className="w-24 h-24 transform -rotate-90" viewBox="0 0 36 36">
@@ -726,9 +769,11 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
                   </h4>
 
                   <div className="p-4 bg-[#18181b] border border-zinc-800 rounded-xl max-h-[240px] overflow-y-auto text-zinc-300 text-[11px] leading-relaxed whitespace-pre-line font-sans prose prose-invert prose-sm">
-                    {selectedSubmission.aiProctoringSummary === 'AI unavailable' 
-                      ? 'AI unavailable: Primary analyzer returned an operational failure or active API key limits. Please check credentials or review raw incident logs manually.'
-                      : (selectedSubmission.aiProctoringSummary || 'Aegis cloud risk engine has not finalized calculations for this submission profile.')}
+                    {selectedSubmission.status === 'terminated' 
+                      ? 'SESSION AUTOMATICALLY TERMINATED\n\nAegis automated proctoring locked this assessment candidate session at 3 strikes for repeated, consecutive multiple-face violation occurrences.\n\nUnder disciplinary rules, this session has been permanently disqualified (0 / total points) with high priority proctoring alerts.'
+                      : selectedSubmission.aiProctoringSummary === 'AI unavailable' 
+                        ? 'AI unavailable: Primary analyzer returned an operational failure or active API key limits. Please check credentials or review raw incident logs manually.'
+                        : (selectedSubmission.aiProctoringSummary || 'Aegis cloud risk engine has not finalized calculations for this submission profile.')}
                   </div>
                 </div>
 
