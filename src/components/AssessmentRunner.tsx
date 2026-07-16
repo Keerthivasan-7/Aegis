@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Assessment, CodingQuestion, ProctoringLog, Question, Submission, UserProfile } from '../types';
 import ProctoringHud from './ProctoringHud';
 import ViolationWarningModal from './ViolationWarningModal';
-import { Clock, ShieldAlert, FileText, CheckCircle, Play, Loader, Code, FileCheck, ArrowRight, CornerDownLeft, AlertTriangle } from 'lucide-react';
+import { Clock, ShieldAlert, FileText, CheckCircle, Play, Loader, Code, FileCheck, ArrowRight, CornerDownLeft, AlertTriangle, Volume2, VolumeX } from 'lucide-react';
 
 interface AssessmentRunnerProps {
   user: UserProfile;
@@ -27,6 +27,273 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
   const [warningModalOpen, setWarningModalOpen] = useState<boolean>(false);
   const [isTerminated, setIsTerminated] = useState<boolean>(false);
   const [isTerminating, setIsTerminating] = useState<boolean>(false);
+
+  // Full screen enforcement status
+  const [isFullScreenActive, setIsFullScreenActive] = useState<boolean>(true);
+  const [fullscreenBypassed, setFullscreenBypassed] = useState<boolean>(false);
+
+  // Tab switch, blur, and fullscreen loss siren alarm states
+  const [alarmActive, setAlarmActive] = useState<boolean>(false);
+  const [alarmTimeLeft, setAlarmTimeLeft] = useState<number>(30);
+
+  // Web Audio API refs for synthesized siren sound
+  const audioContextRef = React.useRef<AudioContext | null>(null);
+  const osc1Ref = React.useRef<OscillatorNode | null>(null);
+  const osc2Ref = React.useRef<OscillatorNode | null>(null);
+  const gainNodeRef = React.useRef<GainNode | null>(null);
+  const sirenIntervalRef = React.useRef<any>(null);
+
+  const startSiren = () => {
+    try {
+      if (audioContextRef.current) return; // Already running
+      
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const audioCtx = new AudioContextClass();
+      audioContextRef.current = audioCtx;
+      
+      const gainNode = audioCtx.createGain();
+      gainNode.gain.setValueAtTime(0.25, audioCtx.currentTime);
+      gainNode.connect(audioCtx.destination);
+      gainNodeRef.current = gainNode;
+      
+      const osc1 = audioCtx.createOscillator();
+      osc1.type = 'sawtooth';
+      osc1.frequency.setValueAtTime(600, audioCtx.currentTime);
+      osc1.connect(gainNode);
+      osc1Ref.current = osc1;
+      
+      const osc2 = audioCtx.createOscillator();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(600, audioCtx.currentTime);
+      osc2.connect(gainNode);
+      osc2Ref.current = osc2;
+      
+      osc1.start();
+      osc2.start();
+      
+      let goingUp = true;
+      let currentFreq = 600;
+      sirenIntervalRef.current = setInterval(() => {
+        if (!audioContextRef.current || !osc1Ref.current || !osc2Ref.current) return;
+        if (goingUp) {
+          currentFreq += 25;
+          if (currentFreq >= 1100) goingUp = false;
+        } else {
+          currentFreq -= 25;
+          if (currentFreq <= 600) goingUp = true;
+        }
+        osc1Ref.current.frequency.setValueAtTime(currentFreq, audioContextRef.current.currentTime);
+        osc2Ref.current.frequency.setValueAtTime(currentFreq * 1.15, audioContextRef.current.currentTime);
+      }, 15);
+    } catch (err) {
+      console.warn("Failed to initialize siren:", err);
+    }
+  };
+
+  const stopSiren = () => {
+    if (sirenIntervalRef.current) {
+      clearInterval(sirenIntervalRef.current);
+      sirenIntervalRef.current = null;
+    }
+    if (osc1Ref.current) {
+      try { osc1Ref.current.stop(); } catch (e) {}
+      osc1Ref.current = null;
+    }
+    if (osc2Ref.current) {
+      try { osc2Ref.current.stop(); } catch (e) {}
+      osc2Ref.current = null;
+    }
+    if (audioContextRef.current) {
+      try { audioContextRef.current.close(); } catch (e) {}
+      audioContextRef.current = null;
+    }
+    gainNodeRef.current = null;
+  };
+
+  // Trigger high security alarm
+  const triggerAlarm = () => {
+    if (isSubmitting || isTerminated || fullscreenBypassed || alarmActive) return;
+    setAlarmActive(true);
+    setAlarmTimeLeft(30);
+    startSiren();
+
+    handleViolationLogged({
+      timestamp: new Date().toISOString(),
+      type: 'tab-switch',
+      details: 'SECURITY ALERT: Candidate switched tabs, minimized, or blurred window focus!'
+    });
+  };
+
+  // Secure automatic disqualification termination on countdown expiry
+  const triggerSecureTerminationDueToAlarm = async () => {
+    setIsTerminated(true);
+    setIsTerminating(true);
+
+    if (document.fullscreenElement && document.exitFullscreen) {
+      try {
+        await document.exitFullscreen();
+      } catch (err) {}
+    }
+
+    try {
+      const finalLogs = [
+        ...proctoringLogs,
+        {
+          timestamp: new Date().toISOString(),
+          type: 'tab-switch',
+          details: 'ASSESSMENT AUTOMATICALLY TERMINATED — Security alarm countdown expired (30 seconds out of bounds).'
+        }
+      ];
+      setProctoringLogs(finalLogs);
+
+      await fetch('/api/terminate-exam', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          submissionId,
+          proctoringLogs: finalLogs,
+          reason: 'tab-switch-timeout'
+        })
+      });
+    } catch (err: any) {
+      console.error('Termination network error:', err);
+      setError('Aegis Secure Gateway could not sync termination event: ' + err.message);
+    } finally {
+      setIsTerminating(false);
+    }
+  };
+
+  // Manual Exit option clicked by user on alarm
+  const handleExitFromAlarm = async () => {
+    stopSiren();
+    setAlarmActive(false);
+    setIsTerminated(true);
+    setIsTerminating(true);
+
+    if (document.fullscreenElement && document.exitFullscreen) {
+      try {
+        await document.exitFullscreen();
+      } catch (err) {}
+    }
+
+    try {
+      const finalLogs = [
+        ...proctoringLogs,
+        {
+          timestamp: new Date().toISOString(),
+          type: 'tab-switch',
+          details: 'ASSESSMENT TERMINATED — Candidate manually selected Exit option during security alarm.'
+        }
+      ];
+      setProctoringLogs(finalLogs);
+
+      await fetch('/api/terminate-exam', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          submissionId,
+          proctoringLogs: finalLogs,
+          reason: 'candidate-selected-exit'
+        })
+      });
+    } catch (err: any) {
+      console.error('Termination network error:', err);
+      setError('Aegis Secure Gateway could not sync termination event: ' + err.message);
+    } finally {
+      setIsTerminating(false);
+    }
+  };
+
+  // Full Screen Recovery
+  const handleRestoreFullScreen = async () => {
+    const docEl = document.documentElement;
+    if (docEl.requestFullscreen) {
+      try {
+        await docEl.requestFullscreen();
+        stopSiren();
+        setAlarmActive(false);
+        setIsFullScreenActive(true);
+      } catch (err) {
+        console.warn("Fullscreen restore failed:", err);
+      }
+    } else {
+      stopSiren();
+      setAlarmActive(false);
+      setIsFullScreenActive(true);
+    }
+  };
+
+  // Stop siren on component unmount
+  useEffect(() => {
+    return () => {
+      stopSiren();
+    };
+  }, []);
+
+  // Sync event listeners for proctoring checks (visibility hidden, window blur, fullscreen exit)
+  useEffect(() => {
+    if (!started || isSubmitting || isTerminated) return;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        triggerAlarm();
+      }
+    };
+
+    const handleWindowBlur = () => {
+      triggerAlarm();
+    };
+
+    const handleFullscreenChange = () => {
+      const isFS = !!document.fullscreenElement;
+      setIsFullScreenActive(isFS);
+      if (!isFS && !fullscreenBypassed) {
+        triggerAlarm();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleWindowBlur);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+
+    // Initial check for fullscreen
+    const isFS = !!document.fullscreenElement;
+    setIsFullScreenActive(isFS);
+    if (!isFS && !fullscreenBypassed) {
+      triggerAlarm();
+    }
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleWindowBlur);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, [started, isSubmitting, isTerminated, fullscreenBypassed, alarmActive, proctoringLogs, submissionId]);
+
+  // Alarm countdown timer loop
+  useEffect(() => {
+    if (!alarmActive || isSubmitting || isTerminated) {
+      stopSiren();
+      return;
+    }
+
+    if (alarmTimeLeft <= 0) {
+      stopSiren();
+      setAlarmActive(false);
+      triggerSecureTerminationDueToAlarm();
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setAlarmTimeLeft(prev => prev - 1);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [alarmActive, alarmTimeLeft, isSubmitting, isTerminated, proctoringLogs, submissionId]);
 
   // 1. Establish server-authoritative exam session
   const requestFullScreenAndStart = async () => {
@@ -145,6 +412,8 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
 
     return () => clearInterval(timer);
   }, [started, timeLeft, isSubmitting, isTerminated]);
+
+
 
   const handleMCSelect = (questionId: string, optionIdx: number) => {
     setAnswers(prev => ({ ...prev, [questionId]: String(optionIdx) }));
@@ -344,7 +613,7 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
               className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-sm transition-all shadow-lg shadow-indigo-600/25 cursor-pointer active:scale-95 font-sans disabled:opacity-50 flex items-center justify-center mx-auto gap-2"
             >
               {initializing && <Loader className="w-4 h-4 animate-spin" />}
-              {initializing ? 'Synchronizing clock...' : 'Configure Webcam & Launch Exam'}
+              {initializing ? 'Synchronizing clock...' : 'Start Exam'}
             </button>
           </div>
         </div>
@@ -425,6 +694,77 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
 
   return (
     <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col justify-between selection:bg-zinc-800">
+      {/* Full-Screen / Focus Loss Siren Warning Blocker Overlay */}
+      {started && (!isFullScreenActive || alarmActive) && !fullscreenBypassed && (
+        <div className="fixed inset-0 z-[9999] bg-[#09090b]/98 flex items-center justify-center p-6 text-center backdrop-blur-md animate-fade-in">
+          <div className="max-w-lg w-full bg-[#121214] border-2 border-rose-600 rounded-3xl p-8 space-y-6 shadow-[0_0_50px_rgba(225,29,72,0.15)] relative overflow-hidden">
+            {/* Pulsing alarm warning glows */}
+            <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-rose-600 via-amber-500 to-rose-600 animate-pulse" />
+            
+            <div className="flex justify-center items-center gap-4">
+              <div className="w-16 h-16 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-500 animate-bounce">
+                <Volume2 className="w-8 h-8" />
+              </div>
+              <div className="w-16 h-16 rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 animate-pulse">
+                <ShieldAlert className="w-8 h-8" />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <span className="text-[10px] uppercase tracking-[0.25em] font-mono font-bold text-rose-500">AEGIS PROCTOR SYSTEM INTRUSION DETECTED</span>
+              <h2 className="text-2xl font-bold tracking-tight text-zinc-100 font-display">SECURITY SIREN PROTOCOL ACTIVATED</h2>
+              <p className="text-zinc-400 text-xs leading-relaxed max-w-md mx-auto">
+                Swapping tabs, minimizing the browser, losing window focus, or exiting full-screen mode violates strict examination guidelines. Aegis has generated an active proctor incident alert.
+              </p>
+            </div>
+
+            {/* Massive bomb-style countdown clock */}
+            <div className="py-6 bg-zinc-950/80 border border-rose-950/40 rounded-2xl space-y-2">
+              <div className="font-mono text-5xl md:text-6xl text-rose-500 font-bold tracking-widest drop-shadow-[0_0_15px_rgba(239,68,68,0.4)] animate-pulse">
+                00:{alarmTimeLeft < 10 ? '0' : ''}{alarmTimeLeft}
+              </div>
+              <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500 font-semibold">
+                Time Remaining Before Automatic Disqualification
+              </div>
+            </div>
+
+            <div className="space-y-3 pt-2">
+              <button
+                onClick={handleRestoreFullScreen}
+                className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-xs transition-all cursor-pointer shadow-lg shadow-indigo-600/25 active:scale-95 flex items-center justify-center gap-2"
+              >
+                <Play className="w-4 h-4 fill-current" />
+                Restore Full-Screen & Resume
+              </button>
+
+              <button
+                onClick={handleExitFromAlarm}
+                className="w-full py-3 bg-[#121214] hover:bg-rose-950/10 text-rose-400 hover:text-rose-300 border border-rose-500/20 rounded-xl font-medium text-xs transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-2"
+              >
+                <VolumeX className="w-4 h-4" />
+                Exit Assessment & Fail Attempt
+              </button>
+
+              <div className="text-[10px] text-zinc-500 font-mono pt-2">
+                If full-screen fails or you are using the AI Studio iframe preview, click below:
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopSiren();
+                    setFullscreenBypassed(true);
+                    setAlarmActive(false);
+                    setIsFullScreenActive(true);
+                  }}
+                  className="block mx-auto mt-2 text-indigo-400 hover:text-indigo-300 font-semibold underline decoration-indigo-500/30 underline-offset-2 hover:decoration-indigo-400/50"
+                >
+                  Bypass Security Check (Developer/Reviewer Mode)
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {warningModalOpen && (
         <ViolationWarningModal 
           strikeCount={strikeCount} 

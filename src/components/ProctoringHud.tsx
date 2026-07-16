@@ -46,13 +46,22 @@ export default function ProctoringHud({ onViolationLogged, isActive, onMultipleF
     let active = true;
     const loadModels = async () => {
       try {
+        // Await TensorFlow.js readiness so it registers the optimal accelerated backend (WebGL)
+        if ((faceapi as any).tf) {
+          try {
+            await (faceapi as any).tf.ready();
+            console.log('TensorFlow.js engine initialized successfully with optimal hardware backend.');
+          } catch (readyErr) {
+            console.warn('TensorFlow.js readiness check bypassed:', readyErr);
+          }
+        }
         await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
         await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
         if (active) {
           setModelsLoaded(true);
         }
       } catch (err) {
-        console.error('Failed to load face-api models:', err);
+        console.warn('Failed to load face-api models:', err);
       }
     };
     loadModels();
@@ -77,7 +86,7 @@ export default function ProctoringHud({ onViolationLogged, isActive, onMultipleF
         setStreamActive(true);
       })
       .catch(err => {
-        console.error('Camera connection error:', err);
+        console.warn('Camera connection error:', err);
         setErrorMessage('Camera access was blocked. Please permit webcam access in browser to proceed.');
       });
 
@@ -246,7 +255,16 @@ export default function ProctoringHud({ onViolationLogged, isActive, onMultipleF
           }
         }
       } catch (err) {
-        console.error('Face detection error:', err);
+        console.warn('Face detection error (handled gracefully):', err);
+        // Fallback state on detection error to prevent HUD freezing or displaying stale face coords
+        latestDetectionRef.current = {
+          box: null,
+          landmarks: null,
+          isLookingAway: false,
+          presence: 'Unattended',
+        };
+        setPresenceStatus('Unattended');
+        setEyeGazeStatus('Departed');
       }
 
       // Schedule next check

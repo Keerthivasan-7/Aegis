@@ -7,6 +7,16 @@ export interface UserProfile {
   role: UserRole;
   createdAt: string;
   password?: string;
+  mobile?: string;
+  age?: string;
+  educationDegree?: string;
+  educationInstitution?: string;
+  educationYear?: string;
+  educationGpa?: string;
+  leetcodeRank?: string;
+  leetcodeUrl?: string;
+  hackerrankRank?: string;
+  hackerrankUrl?: string;
 }
 
 export type QuestionType = 'multiple-choice' | 'coding';

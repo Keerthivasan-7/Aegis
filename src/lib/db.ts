@@ -313,7 +313,7 @@ export async function registerUserDoc(user: UserProfile): Promise<void> {
   const list = getLocalItem<UserProfile[]>('users', defaultUsers);
   const index = list.findIndex(u => u.userId === user.userId);
   if (index >= 0) {
-    list[index] = user;
+    list[index] = { ...list[index], ...user };
   } else {
     list.push(user);
   }
@@ -321,13 +321,7 @@ export async function registerUserDoc(user: UserProfile): Promise<void> {
 
   if (!isFirestoreAvailable) return;
   try {
-    await setDoc(doc(db, 'users', user.userId), {
-      userId: user.userId,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      createdAt: user.createdAt
-    });
+    await setDoc(doc(db, 'users', user.userId), user, { merge: true });
   } catch (error) {
     console.warn('Firestore registerUserDoc failed, profile saved locally:', error);
   }

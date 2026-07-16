@@ -93,6 +93,9 @@ export default function App() {
         user={currentUser} 
         onSelectAssessment={setActiveAssessment} 
         onLogout={handleLogout} 
+        onUpdateProfile={(updatedUser) => {
+          setCurrentUserState(updatedUser);
+        }}
       />
     );
   }

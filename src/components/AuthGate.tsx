@@ -4,9 +4,6 @@ import {
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
   updateProfile, 
-  GoogleAuthProvider, 
-  signInWithPopup,
-  OAuthProvider,
   sendPasswordResetEmail
 } from 'firebase/auth';
 import { auth } from '../lib/firebase';
@@ -21,9 +18,10 @@ import {
   EyeOff, 
   Loader, 
   AlertCircle, 
-  Chrome, 
   HelpCircle,
-  Info 
+  Info,
+  Check,
+  X
 } from 'lucide-react';
 
 interface AuthGateProps {
@@ -45,21 +43,27 @@ export default function AuthGate({ onAuthSuccess }: AuthGateProps) {
   const [resetEmailSent, setResetEmailSent] = useState(false);
 
   // Strength calculation
+  const getPasswordRules = (pass: string) => {
+    return [
+      { label: 'Minimum 8 characters', met: pass.length >= 8 },
+      { label: 'One uppercase letter (A-Z)', met: /[A-Z]/.test(pass) },
+      { label: 'One lowercase letter (a-z)', met: /[a-z]/.test(pass) },
+      { label: 'One number (0-9)', met: /[0-9]/.test(pass) },
+      { label: 'One symbol (e.g. !@#$)', met: /[^A-Za-z0-9]/.test(pass) },
+    ];
+  };
+
   const getPasswordStrength = (pass: string) => {
-    if (!pass) return { score: 0, label: '', color: 'bg-zinc-800', textColor: 'text-zinc-500' };
-    let score = 0;
-    if (pass.length >= 8) score++;
-    if (/[A-Z]/.test(pass)) score++;
-    if (/[a-z]/.test(pass)) score++;
-    if (/[0-9]/.test(pass)) score++;
-    if (/[^A-Za-z0-9]/.test(pass)) score++;
+    if (!pass) return { score: 0, label: 'None', color: 'bg-zinc-800', textColor: 'text-zinc-500' };
+    const rules = getPasswordRules(pass);
+    const score = rules.filter(r => r.met).length;
 
     if (score <= 2) {
       return { score, label: 'Weak', color: 'bg-rose-500', textColor: 'text-rose-400' };
     } else if (score <= 4) {
-      return { score, label: 'Medium', color: 'bg-zinc-400', textColor: 'text-zinc-400' };
+      return { score, label: 'Medium', color: 'bg-amber-500', textColor: 'text-amber-400' };
     } else {
-      return { score, label: 'Strong (Secure)', color: 'bg-indigo-500', textColor: 'text-indigo-400' };
+      return { score, label: 'Strong (Secure)', color: 'bg-emerald-500', textColor: 'text-emerald-400' };
     }
   };
 
@@ -193,69 +197,7 @@ export default function AuthGate({ onAuthSuccess }: AuthGateProps) {
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    setError('');
-    setResetEmailSent(false);
-    setShowConfigTroubleshooter(false);
-    setLoading(true);
-    try {
-      const provider = new GoogleAuthProvider();
-      const credential = await signInWithPopup(auth, provider);
-      
-      const userEmail = credential.user.email || '';
-      
-      let profile = await getUserProfile(credential.user.uid);
-      if (!profile) {
-        // Register doc with default role as 'student' - admin escalation is done out-of-band
-        profile = {
-          userId: credential.user.uid,
-          name: credential.user.displayName || 'Candidate',
-          email: userEmail,
-          role: 'student',
-          createdAt: new Date().toISOString()
-        };
-        await registerUserDoc(profile);
-      }
-      onAuthSuccess(profile);
-    } catch (err: any) {
-      console.error("Google Sign-In failed:", err);
-      setError(err.message || 'Google Sign-In failed.');
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  const handleAppleSignIn = async () => {
-    setError('');
-    setResetEmailSent(false);
-    setShowConfigTroubleshooter(false);
-    setLoading(true);
-    try {
-      const provider = new OAuthProvider('apple.com');
-      const credential = await signInWithPopup(auth, provider);
-      
-      const userEmail = credential.user.email || '';
-      
-      let profile = await getUserProfile(credential.user.uid);
-      if (!profile) {
-        // Register doc with default role as 'student' - admin escalation is done out-of-band
-        profile = {
-          userId: credential.user.uid,
-          name: credential.user.displayName || 'Candidate',
-          email: userEmail,
-          role: 'student',
-          createdAt: new Date().toISOString()
-        };
-        await registerUserDoc(profile);
-      }
-      onAuthSuccess(profile);
-    } catch (err: any) {
-      console.error("Apple Sign-In failed:", err);
-      setError(err.message || 'Apple Sign-In failed. Note that Apple Sign-In requires configuring your Apple Service ID, Team ID, Key ID, and private key in the Firebase Console.');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   return (
     <div className="min-h-screen bg-[#09090b] text-zinc-100 flex items-center justify-center p-4 selection:bg-zinc-800">
@@ -315,36 +257,7 @@ export default function AuthGate({ onAuthSuccess }: AuthGateProps) {
               </p>
             </div>
 
-            {/* Google & Apple Sign-In stack */}
-            <div className="space-y-2.5">
-              <button
-                type="button"
-                disabled={loading}
-                onClick={handleGoogleSignIn}
-                className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800/60 rounded-xl text-xs font-medium text-zinc-200 transition-all font-sans cursor-pointer disabled:opacity-50"
-              >
-                <Chrome className="w-4 h-4 text-rose-500" />
-                Sign in with Google Academic Account
-              </button>
 
-              <button
-                type="button"
-                disabled={loading}
-                onClick={handleAppleSignIn}
-                className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800/60 rounded-xl text-xs font-medium text-zinc-200 transition-all font-sans cursor-pointer disabled:opacity-50"
-              >
-                <svg className="w-4 h-4 fill-current text-white" viewBox="0 0 24 24">
-                  <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.97 4.17c.66-.81 1.11-1.93.99-3.06-1 .04-2.21.67-2.93 1.49-.62.69-1.16 1.84-1.01 2.96 1.12.09 2.27-.57 2.95-1.39z" />
-                </svg>
-                Sign in with Apple Academic Account
-              </button>
-            </div>
-
-            <div className="relative flex py-0.5 items-center">
-              <div className="flex-grow border-t border-zinc-850"></div>
-              <span className="flex-shrink mx-3 text-[10px] font-mono uppercase text-zinc-500 tracking-widest">Or credentials</span>
-              <div className="flex-grow border-t border-zinc-850"></div>
-            </div>
 
             <form onSubmit={handleSubmit} className="space-y-3.5">
               {error && (
@@ -480,17 +393,34 @@ export default function AuthGate({ onAuthSuccess }: AuthGateProps) {
 
                 {/* Password Strength Indicator */}
                 {!isLogin && password && (
-                  <div className="space-y-1 mt-1.5">
+                  <div className="space-y-2 mt-1.5 p-3 bg-zinc-900/50 border border-zinc-850 rounded-xl">
                     <div className="flex justify-between items-center text-[10px] font-mono">
                       <span className="text-zinc-500 uppercase">Aegis Strength Profile:</span>
                       <span className={`${getPasswordStrength(password).textColor} font-semibold uppercase`}>
                         {getPasswordStrength(password).label}
                       </span>
                     </div>
-                    <div className="h-1 w-full bg-zinc-900 rounded-full overflow-hidden flex gap-0.5">
+                    <div className="h-1 w-full bg-zinc-950 rounded-full overflow-hidden flex gap-0.5">
                       <div className={`h-full flex-1 transition-all duration-300 ${getPasswordStrength(password).score >= 1 ? getPasswordStrength(password).color : 'bg-zinc-800'}`} />
+                      <div className={`h-full flex-1 transition-all duration-300 ${getPasswordStrength(password).score >= 2 ? getPasswordStrength(password).color : 'bg-zinc-800'}`} />
                       <div className={`h-full flex-1 transition-all duration-300 ${getPasswordStrength(password).score >= 3 ? getPasswordStrength(password).color : 'bg-zinc-800'}`} />
+                      <div className={`h-full flex-1 transition-all duration-300 ${getPasswordStrength(password).score >= 4 ? getPasswordStrength(password).color : 'bg-zinc-800'}`} />
                       <div className={`h-full flex-1 transition-all duration-300 ${getPasswordStrength(password).score >= 5 ? getPasswordStrength(password).color : 'bg-zinc-800'}`} />
+                    </div>
+                    
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1 pt-1 border-t border-zinc-850/50">
+                      {getPasswordRules(password).map((rule, idx) => (
+                        <div key={idx} className="flex items-center gap-1.5 text-[10px] font-mono">
+                          {rule.met ? (
+                            <Check className="w-3 h-3 text-emerald-400 flex-shrink-0" />
+                          ) : (
+                            <X className="w-3 h-3 text-rose-500/70 flex-shrink-0" />
+                          )}
+                          <span className={rule.met ? 'text-zinc-300' : 'text-zinc-500'}>
+                            {rule.label}
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )}
