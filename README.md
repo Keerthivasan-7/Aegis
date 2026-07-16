@@ -121,8 +121,14 @@ VITE_FIREBASE_STORAGE_BUCKET=
 VITE_FIREBASE_MESSAGING_SENDER_ID=
 VITE_FIREBASE_APP_ID=
 
-VITE_GEMINI_API_KEY=
+# Server-side only — do NOT prefix with VITE_, or it will be bundled into the
+# client and exposed in the browser.
+GEMINI_API_KEY=
 ```
+
+> The `VITE_FIREBASE_*` values above are Firebase's public client configuration
+> (safe to ship to the browser). `GEMINI_API_KEY` is a real secret used only by
+> the server (`server.ts`) and must never be prefixed with `VITE_`.
 
 ---
 
