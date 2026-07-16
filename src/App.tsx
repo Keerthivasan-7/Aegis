@@ -139,10 +139,10 @@ export default function App() {
       );
     }
     return (
-      <CandidatePortal 
-        user={currentUser} 
-        onSelectAssessment={setActiveAssessment} 
-        onLogout={handleLogout} 
+      <CandidatePortal
+        user={currentUser}
+        onSelectAssessment={setActiveAssessment}
+        onLogout={handleLogout}
         onUpdateProfile={(updatedUser) => {
           setCurrentUserState(updatedUser);
         }}
@@ -152,9 +152,9 @@ export default function App() {
 
   // Admin / Examiner Role
   return (
-    <AdminDashboard 
-      user={currentUser} 
-      onLogout={handleLogout} 
+    <AdminDashboard
+      user={currentUser}
+      onLogout={handleLogout}
     />
   );
 }
