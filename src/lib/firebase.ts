@@ -12,10 +12,31 @@ const firebaseConfig = {
   appId: (import.meta as any).env.VITE_FIREBASE_APP_ID
 };
 
-const app = initializeApp(firebaseConfig);
+// Validate required Firebase config
+const isConfigValid = 
+  firebaseConfig.apiKey &&
+  firebaseConfig.authDomain &&
+  firebaseConfig.projectId &&
+  firebaseConfig.appId;
 
-export const auth = getAuth(app);
-setPersistence(auth, browserLocalPersistence).catch(e => console.error("Persistence setting failed:", e));
+let app: any = null;
+let auth: any = null;
+let db: any = null;
+let storage: any = null;
 
-export const db = getFirestore(app);
-export const storage = getStorage(app);
+if (isConfigValid) {
+  try {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    setPersistence(auth, browserLocalPersistence).catch(e => console.error("Persistence setting failed:", e));
+    db = getFirestore(app);
+    storage = getStorage(app);
+  } catch (e) {
+    console.error('Firebase initialization failed:', e);
+  }
+} else {
+  console.warn('Firebase config incomplete — running in offline mode. Set VITE_FIREBASE_* env vars to enable cloud sync.');
+}
+
+export { auth, db, storage };
+export const isFirebaseEnabled = isConfigValid && !!auth;

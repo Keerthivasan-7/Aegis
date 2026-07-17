@@ -28,6 +28,33 @@ interface AuthGateProps {
 }
 
 export default function AuthGate({ onAuthSuccess }: AuthGateProps) {
+  if (!isFirebaseEnabled) {
+    return (
+      <div className="min-h-screen bg-[#09090b] text-zinc-100 flex items-center justify-center p-4 selection:bg-zinc-800">
+        <div className="w-full max-w-md bg-[#121214] border border-zinc-800 rounded-2xl p-8 text-center">
+          <div className="w-16 h-16 rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mx-auto text-amber-500 mb-6">
+            <AlertCircle className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-semibold text-zinc-100 mb-3">Firebase Not Configured</h2>
+          <p className="text-zinc-400 text-sm mb-6 leading-relaxed">
+            Cloud authentication requires valid Firebase credentials. Please configure the following environment variables in your <code className="font-mono text-zinc-300 bg-zinc-900/50 px-1.5 py-0.5 rounded">.env</code> file:
+          </p>
+          <div className="text-left space-y-1 text-xs font-mono text-zinc-300 bg-zinc-950/50 p-4 rounded-lg border border-zinc-800 mb-6">
+            <div>VITE_FIREBASE_API_KEY=</div>
+            <div>VITE_FIREBASE_AUTH_DOMAIN=</div>
+            <div>VITE_FIREBASE_PROJECT_ID=</div>
+            <div>VITE_FIREBASE_STORAGE_BUCKET=</div>
+            <div>VITE_FIREBASE_MESSAGING_SENDER_ID=</div>
+            <div>VITE_FIREBASE_APP_ID=</div>
+          </div>
+          <p className="text-[11px] text-zinc-500">
+            Obtain these from your Firebase Console → Project Settings → General → Your apps
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const [isLogin, setIsLogin] = useState(true);
   const [role, setRole] = useState<UserRole>('student');
   const [name, setName] = useState('');

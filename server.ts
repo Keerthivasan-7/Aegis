@@ -5,6 +5,7 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
 import vm from 'vm';
 import { exec } from 'child_process';
 import fs from 'fs';
@@ -37,25 +38,6 @@ try {
   firestoreDb = getFirestore();
 } catch (error) {
   console.error("CRITICAL: Firebase Admin initialization failed. Server operations may fallback to simulation:", error);
-}
-
-// --- SERVER-SIDE LOCAL SANDBOX MODE FLAG ---
-// Computed once at startup from server-only env vars. The client cannot influence this flag.
-// local-* bearer tokens are ONLY accepted when the server has determined it has no real
-// Firebase / GCP credentials — i.e., a genuine offline demo deployment.
-// In any deployment where at least one of the following is set, local tokens are rejected outright.
-const IS_LOCAL_SANDBOX_MODE: boolean =
-  !process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim() &&
-  !process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim() &&
-  !process.env.GOOGLE_CLOUD_PROJECT?.trim();
-
-if (IS_LOCAL_SANDBOX_MODE) {
-  console.warn('[Auth] ⚠  Server is operating in LOCAL SANDBOX MODE — no Firebase/GCP credentials detected.');
-  console.warn('[Auth]    local-* tokens are accepted for offline demo use only.');
-  console.warn('[Auth]    To disable local-token auth in production, set FIREBASE_SERVICE_ACCOUNT_JSON or GOOGLE_CLOUD_PROJECT.');
-} else {
-  console.log('[Auth] ✓  Firebase/GCP credentials detected. LOCAL SANDBOX MODE is DISABLED.');
-  console.log('[Auth]    local-* tokens will be rejected regardless of what clients send.');
 }
 
 // --- LAZY GEMINI CLIENT ---
