@@ -179,25 +179,14 @@ export default function CandidateProfile({ user, onUpdateProfile, onBack }: Cand
 
     try {
       const firebaseUser = auth.currentUser;
-      if (firebaseUser) {
-        await updatePassword(firebaseUser, newPassword);
-        setPasswordSuccess('Password successfully updated and key hashes rotated across the identity grid.');
-        setCurrentPassword('');
-        setNewPassword('');
-        setConfirmNewPassword('');
-      } else {
-        // Fallback local sandbox update
-        const updatedProfile: UserProfile = {
-          ...user,
-          password: newPassword
-        };
-        await registerUserDoc(updatedProfile);
-        onUpdateProfile(updatedProfile);
-        setPasswordSuccess('Sandbox profile password updated successfully (Offline Environment).');
-        setCurrentPassword('');
-        setNewPassword('');
-        setConfirmNewPassword('');
+      if (!firebaseUser) {
+        throw new Error('No authenticated user found. Please sign in again.');
       }
+      await updatePassword(firebaseUser, newPassword);
+      setPasswordSuccess('Password successfully updated and key hashes rotated across the identity grid.');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmNewPassword('');
     } catch (err: any) {
       console.error('Password Update Error:', err);
       if (err.code === 'auth/requires-recent-login') {

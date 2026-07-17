@@ -4,7 +4,7 @@ import { Loader } from 'lucide-react';
 
 import { Assessment, UserProfile } from './types';
 import { auth } from './lib/firebase';
-import { getUserProfile, validateFirebaseConnection } from './lib/db';
+import { getUserProfile } from './lib/db';
 
 import LandingPage from './components/landing/LandingPage';
 import AuthGate from './components/AuthGate';
@@ -25,9 +25,6 @@ export default function App() {
     const initialize = async () => {
       try {
         setLoading(true);
-
-        // Verify Firebase configuration
-        await validateFirebaseConnection();
 
         unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
           try {

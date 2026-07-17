@@ -467,30 +467,6 @@ async function requireAuth(req: any, res: any, next: any) {
 
   const token = authHeader.substring(7);
 
-  if (token.startsWith('local-')) {
-    // Local-token auth: ONLY honored when the server itself has determined it is in local sandbox
-    // mode (IS_LOCAL_SANDBOX_MODE). The client's claim of "I am in local mode" is never trusted —
-    // this flag is server-computed from env vars at startup and cannot be influenced by any request.
-    if (!IS_LOCAL_SANDBOX_MODE) {
-      return res.status(401).json({ error: 'Unauthorized: Local sandbox tokens are not accepted in this deployment' });
-    }
-    const userId = token.substring(6);
-    const userProfile = serverInMemoryUsers.get(userId);
-    if (!userProfile) {
-      return res.status(401).json({ error: 'Unauthorized: Invalid local sandbox user credentials' });
-    }
-    // SECURITY: Local-mode users are NEVER granted admin role, even if the stored profile holds
-    // role:'admin'. An unauthenticated caller guessing a userId string must not be able to mint
-    // admin authority. verifyActiveSession's admin short-circuit is only reachable via a real
-    // Firebase-verified admin token — never through the local-token path.
-    const safeProfile = {
-      ...userProfile,
-      role: userProfile.role === 'admin' ? 'student' : userProfile.role
-    };
-    req.user = safeProfile;
-    return next();
-  }
-
   // Firebase Admin Token Verification
   try {
     const decodedToken = await getAuth().verifyIdToken(token);
@@ -1048,7 +1024,7 @@ app.post('/api/terminate-exam', requireAuth, async (req, res) => {
 process.on('unhandledRejection', (reason: any) => {
   const msg = reason instanceof Error ? reason.message : String(reason);
   if (msg.includes('NO_ADC_FOUND') || msg.includes('Could not load the default credentials') || msg.includes('default credentials')) {
-    console.warn('[Auth] Firebase ADC not available (expected in local sandbox mode). Firestore disabled.');
+    console.warn('[Auth] Firebase ADC not available. Firestore disabled.');
     firestoreDb = null;
   } else {
     // Re-surface unexpected unhandled rejections as warnings so real bugs aren't silenced
@@ -1058,13 +1034,7 @@ process.on('unhandledRejection', (reason: any) => {
 
 // Serve frontend assets
 async function startServer() {
-  if (IS_LOCAL_SANDBOX_MODE) {
-    // In local sandbox mode there are no Firebase credentials. Skip the Firestore connection
-    // check entirely — attempting it would trigger gRPC/ADC initialization that throws an
-    // unhandled rejection outside our try/catch boundary and crashes the process.
-    console.log('[Firebase Info] Local sandbox mode: Firestore client disabled at startup. Using in-memory cache.');
-    firestoreDb = null;
-  } else if (firestoreDb) {
+  if (firestoreDb) {
     try {
       // Validate read permission on Firestore to catch unauthorized Project ID configuration early
       await firestoreDb.collection('_connection_check_').limit(1).get();

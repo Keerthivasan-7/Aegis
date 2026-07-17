@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { AegisLogo } from './AegisLogo';
 import { Assessment, Question, Submission, UserProfile } from '../types';
-import { getAssessments, getSubmissions, saveAssessment, isUsingLocalSandbox } from '../lib/db';
+import { getAssessments, getSubmissions, saveAssessment } from '../lib/db';
 import { RiskDistributionChart, ViolationBreakdownChart } from './CustomCharts';
 import { 
   Users, ShieldAlert, Award, FileSpreadsheet, Search, RefreshCw, 
@@ -155,11 +155,6 @@ export default function AdminDashboard({ user, onLogout }: AdminDashboardProps) 
             <AegisLogo size={32} />
             <span className="font-display font-semibold tracking-tight text-md text-zinc-100">Aegis</span>
             <span className="text-[10px] bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-zinc-400 font-mono font-medium">Examiner Dashboard</span>
-            {isUsingLocalSandbox() && (
-              <span className="text-[10px] bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded px-1.5 py-0.5 font-mono font-medium animate-pulse">
-                Sandbox Mode (Offline Fallback)
-              </span>
-            )}
           </div>
 
           <div className="flex items-center gap-4">

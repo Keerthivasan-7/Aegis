@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Assessment, Submission, UserProfile } from '../types';
-import { getAssessments, getSubmissionsForStudent, isUsingLocalSandbox } from '../lib/db';
+import { getAssessments, getSubmissionsForStudent } from '../lib/db';
 import { BookOpen, Calendar, Clock, Award, ShieldAlert, CheckCircle, FileCode, Play, Loader, AlertTriangle, User } from 'lucide-react';
 import CandidateProfile from './CandidateProfile';
 import { AegisLogo } from './AegisLogo';
@@ -53,11 +53,6 @@ export default function CandidatePortal({ user, onSelectAssessment, onLogout, on
             <AegisLogo size={32} />
             <span className="font-display font-semibold tracking-tight text-md text-zinc-100">Aegis</span>
             <span className="text-[10px] bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-zinc-400 font-mono font-medium">Candidate Portal</span>
-            {isUsingLocalSandbox() && (
-              <span className="text-[10px] bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded px-1.5 py-0.5 font-mono font-medium animate-pulse">
-                Sandbox Mode (Offline Fallback)
-              </span>
-            )}
           </div>
 
           {/* Navigation Tabs */}
