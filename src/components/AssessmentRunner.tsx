@@ -53,6 +53,9 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
   const [isFullScreenActive, setIsFullScreenActive] = useState<boolean>(true);
   const [fullscreenBypassed, setFullscreenBypassed] = useState<boolean>(false);
 
+  // Track if user has started the test (for reload warning)
+  const [hasStartedTest, setHasStartedTest] = useState(false);
+
   // Tab switch, blur, and fullscreen loss siren alarm states
   const [alarmActive, setAlarmActive] = useState<boolean>(false);
   const [alarmTimeLeft, setAlarmTimeLeft] = useState<number>(30);
@@ -293,6 +296,56 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
     };
   }, [started, isSubmitting, isTerminated, fullscreenBypassed, alarmActive, proctoringLogs, submissionId]);
 
+  // Prevent accidental reload/close during active test
+  useEffect(() => {
+    if (!started || !hasStartedTest || isSubmitting || isTerminated) return;
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = 'You have an active assessment in progress. Leaving this page will reset your progress and answers. Are you sure you want to exit?';
+      return e.returnValue;
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [started, hasStartedTest, isSubmitting, isTerminated]);
+
+  // Block keyboard shortcuts that exit fullscreen during test
+  useEffect(() => {
+    if (!started || isSubmitting || isTerminated) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Keys that can exit fullscreen: F11, Escape, Alt+F4 (Windows), Ctrl+W, Ctrl+F4, Cmd+W (Mac)
+      const isFullscreenExitKey =
+        e.key === 'F11' ||
+        e.key === 'Escape' ||
+        (e.key === 'F4' && e.altKey) ||
+        (e.key === 'w' && (e.ctrlKey || e.metaKey)) ||
+        (e.key === 'F4' && (e.ctrlKey || e.metaKey)) ||
+        (e.key === 'Tab' && e.altKey); // Alt+Tab
+
+      if (isFullscreenExitKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        // Log violation
+        handleViolationLogged({
+          timestamp: new Date().toISOString(),
+          type: 'tab-switch',
+          details: `Blocked fullscreen exit attempt via keyboard: ${e.key}${e.altKey ? ' + Alt' : ''}${e.ctrlKey ? ' + Ctrl' : ''}${e.metaKey ? ' + Cmd' : ''}`
+        });
+        
+        // Trigger alarm if fullscreen is active
+        if (isFullScreenActive) {
+          triggerAlarm();
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown, true); // Use capture phase
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, [started, isSubmitting, isTerminated, isFullScreenActive]);
+
   // Alarm countdown timer loop
   useEffect(() => {
     if (!alarmActive || isSubmitting || isTerminated) {
@@ -347,6 +400,7 @@ export default function AssessmentRunner({ user, assessment, onFinish }: Assessm
       }
 
       setStarted(true);
+      setHasStartedTest(true);
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'Server time synchronization handshake failed. Please reload and try again.');
